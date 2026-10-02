@@ -1,0 +1,75 @@
+version: "3.9"
+
+# ── Shared network ────────────────────────────────────────────────────────────
+networks:
+  rag-net:
+    driver: bridge
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  chroma-data:
+  redis-data:
+
+services:
+  # ── FastAPI Backend ─────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rag-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CHROMA_PERSIST_DIR: /app/data/chroma
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/app/data/chroma
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - rag-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s  # allow time for model downloads on first run
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.4-alpine
+    container_name: rag-redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - rag-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── ChromaDB Standalone (optional — comment out to use embedded mode) ───────
+  # chromadb:
+  #   image: chromadb/chroma:latest
+  #   container_name: rag-chromadb
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8001:8000"
+  #   volumes:
+  #     - chroma-data:/chroma/chroma
+  #   networks:
+  #     - rag-net
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
