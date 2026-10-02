@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # ── LLM ──────────────────────────────────────────────────────────────────
     groq_api_key: str = Field(..., description="Groq API key")
-    model_names: List[str] = Field(
+    model_names: List[str] | str = Field(
         default=["llama-3.3-70b-versatile"],
         description="Comma-separated list of allowed Groq model identifiers",
     )
@@ -54,20 +54,29 @@ class Settings(BaseSettings):
     # ── Application ───────────────────────────────────────────────────────────
     app_env: str = Field(default="development")
     log_level: str = Field(default="INFO")
-    cors_origins: List[str] = Field(default=["http://localhost:3000"])
+    cors_origins: List[str] | str = Field(default=["http://localhost:3000", "http://localhost:5173"])
 
     # ── Validators ────────────────────────────────────────────────────────────
     @field_validator("model_names", "cors_origins", mode="before")
     @classmethod
     def _split_csv(cls, v: str | list) -> list:
         if isinstance(v, str):
-            return [item.strip() for item in v.split(",") if item.strip()]
+            v_str = v.strip()
+            if v_str.startswith("[") and v_str.endswith("]"):
+                import json
+                try:
+                    return json.loads(v_str)
+                except Exception:
+                    pass
+            return [item.strip() for item in v_str.split(",") if item.strip()]
         return v
 
     @field_validator("default_model_name")
     @classmethod
     def _default_in_allowed(cls, v: str, info) -> str:
         allowed = info.data.get("model_names", [])
+        if isinstance(allowed, str):
+            allowed = [x.strip() for x in allowed.split(",") if x.strip()]
         if allowed and v not in allowed:
             raise ValueError(
                 f"default_model_name '{v}' must be one of model_names: {allowed}"

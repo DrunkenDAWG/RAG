@@ -16,7 +16,10 @@ RUN pip install --prefix=/install -r requirements.txt
 FROM python:3.11-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/tmp/hf_cache \
+    SENTENCE_TRANSFORMERS_HOME=/tmp/hf_cache \
+    TORCH_HOME=/tmp/hf_cache
 
 # Non-root user for security
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
@@ -29,8 +32,8 @@ COPY --from=builder /install /usr/local
 # Copy application source
 COPY app/ ./app/
 
-# Chroma persistence volume mount point
-RUN mkdir -p /app/data/chroma && chown appuser:appgroup /app/data/chroma
+# Data and cache persistence directory
+RUN mkdir -p /app/data/chroma /tmp/hf_cache && chown -R appuser:appgroup /app/data /tmp/hf_cache
 
 USER appuser
 

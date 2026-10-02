@@ -16,8 +16,18 @@ Includes:
 """
 from __future__ import annotations
 
+import os
+import tempfile
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+
+# Ensure writeable cache directory for HuggingFace & PyTorch models
+_cache_dir = os.path.join(tempfile.gettempdir(), "rag_hf_cache")
+os.makedirs(_cache_dir, exist_ok=True)
+os.environ["HF_HOME"] = _cache_dir
+os.environ["SENTENCE_TRANSFORMERS_HOME"] = _cache_dir
+os.environ["TRANSFORMERS_CACHE"] = _cache_dir
+os.environ["TORCH_HOME"] = _cache_dir
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware

@@ -74,13 +74,13 @@ extract_json_field() {
     if command -v jq >/dev/null 2>&1; then
         echo "$json_str" | jq -r ".$field // empty"
     else
-        python -c "import sys, json; data=json.loads(sys.argv[1]); print(data.get('$field', ''))" "$json_str" 2>/dev/null || echo ""
+        echo "$json_str" | sed -n "s/.*\"$field\":\"\([^\"]*\)\".*/\1/p"
     fi
 }
 
 # ── Health Check ──────────────────────────────────────────────────────────────
 echo -e "${BOLD}Checking backend connectivity on ${API_BASE_URL}...${NC}"
-HEALTH_RESP=$(curl -s -w "\n%{http_code}" "${API_BASE_URL}/health" || echo "000")
+HEALTH_RESP=$(curl -s -w "\n%{http_code}" "${API_BASE_URL}/health" | tr -d '\r' || echo "000")
 HTTP_CODE=$(echo "$HEALTH_RESP" | tail -n1)
 
 if [ "$HTTP_CODE" != "200" ]; then
@@ -92,7 +92,7 @@ log_pass "Backend is healthy and responding."
 # ── STEP 1: Create Session ───────────────────────────────────────────────────
 log_step "1" "Create Chat Session"
 
-SESSION_RESP=$(curl -s -w "\n%{http_code}" -X POST "${API_BASE_URL}/api/v1/sessions")
+SESSION_RESP=$(curl -s -w "\n%{http_code}" -X POST "${API_BASE_URL}/api/v1/sessions" | tr -d '\r')
 HTTP_CODE=$(echo "$SESSION_RESP" | tail -n1)
 BODY=$(echo "$SESSION_RESP" | sed '$d')
 
@@ -123,7 +123,7 @@ fi
 
 UPLOAD_RESP=$(curl -s -w "\n%{http_code}" -X POST "${API_BASE_URL}/api/v1/documents/upload" \
     -H "X-Session-Id: ${SESSION_ID}" \
-    -F "files=@${FIXTURE_PATH}")
+    -F "files=@${FIXTURE_PATH}" | tr -d '\r')
 
 HTTP_CODE=$(echo "$UPLOAD_RESP" | tail -n1)
 BODY=$(echo "$UPLOAD_RESP" | sed '$d')

@@ -16,9 +16,16 @@ Design:
   • Return type is List[Document] (same as hybrid_search), with the `.score`
     field replaced by the cross-encoder logit so downstream code stays uniform.
 """
-from __future__ import annotations
-
+import os
+import tempfile
 from typing import List, Optional
+
+_cache_dir = os.path.join(tempfile.gettempdir(), "rag_hf_cache")
+os.makedirs(_cache_dir, exist_ok=True)
+os.environ["HF_HOME"] = _cache_dir
+os.environ["SENTENCE_TRANSFORMERS_HOME"] = _cache_dir
+os.environ["TRANSFORMERS_CACHE"] = _cache_dir
+os.environ["TORCH_HOME"] = _cache_dir
 
 from sentence_transformers import CrossEncoder
 from starlette.concurrency import run_in_threadpool

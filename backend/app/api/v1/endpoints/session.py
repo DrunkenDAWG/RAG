@@ -10,7 +10,7 @@ import json
 import uuid
 from typing import List
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import BaseModel
 
 from app.api.deps import AuthDep, RedisDep
@@ -103,9 +103,10 @@ async def get_session(_: AuthDep, redis: RedisDep, session_id: str) -> SessionHi
 @router.delete(
     "/{session_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete a session and its history",
 )
-async def delete_session(_: AuthDep, redis: RedisDep, session_id: str) -> None:
+async def delete_session(_: AuthDep, redis: RedisDep, session_id: str) -> Response:
     deleted = await redis.delete(_session_key(session_id))
     if not deleted:
         raise HTTPException(
@@ -113,3 +114,4 @@ async def delete_session(_: AuthDep, redis: RedisDep, session_id: str) -> None:
             detail=f"Session '{session_id}' not found.",
         )
     logger.info("session.deleted", session_id=session_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
