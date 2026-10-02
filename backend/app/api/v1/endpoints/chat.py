@@ -1,22 +1,31 @@
 """
 app/api/v1/endpoints/chat.py
 ──────────────────────────────
-Chat endpoints:
-  POST /chat          – non-streaming RAG chat (with Redis cache)
-  POST /chat/stream   – streaming RAG chat via Server-Sent Events
+Phase 3 — Streaming RAG endpoint with query rewriting and smart caching.
 
-Full pipeline per request:
-  1. Load session history from Redis
-  2. Hybrid retrieval (dense + BM25 + RRF)
-  3. Cross-encoder reranking
-  4. Groq LLM completion
-  5. Persist turns to session history
-  6. Cache response keyed on (session_id, query, model)
+Single endpoint: POST /api/v1/chat/stream
+
+Full pipeline (in order):
+  1. Check Redis cache (session_id + corpus_version + rewritten_query key)
+     → If HIT: replay stored answer as SSE stream and exit early.
+  2. Load session history from Redis.
+  3. Rewrite query via LLM (llama-3.1-8b-instant) to resolve anaphora.
+  4. Hybrid search (asyncio.gather: dense ChromaDB + sparse BM25 + RRF).
+  5. Cross-encoder rerank in threadpool (non-blocking).
+  6. Stream LLM generation (llama-3.3-70b-versatile) token-by-token as SSE.
+  7. On stream complete: persist turn to session history + write cache.
+
+SSE event shapes:
+  data: {"type": "rewritten_query", "content": "<str>"}
+  data: {"type": "token",           "content": "<delta>"}
+  data: {"type": "done",            "sources": [...]}
+  data: {"type": "error",           "detail":  "<str>"}
+  data: {"type": "cached",          "answer":  "<str>", "sources": [...]}
 """
 from __future__ import annotations
 
 import json
-from typing import List, Optional
+from typing import AsyncIterator, List, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -24,136 +33,190 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import AuthDep, RedisDep
 from app.api.v1.endpoints.session import append_turn, get_session_history
+from app.core.cache import (
+    get_cached_response,
+    get_corpus_version,
+    set_cached_response,
+)
 from app.core.logging import get_logger
-from app.core.redis import cache_get, cache_set
-from app.services.llm import chat_completion, chat_completion_stream
+from app.services.llm import generate_rag_stream, rewrite_query
 from app.services.reranker import rerank
-from app.services.retriever import hybrid_retrieve
+from app.services.retriever import Document, hybrid_search
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
-# ── Schemas ───────────────────────────────────────────────────────────────────
+# ── Request / Response schemas ────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    session_id: str = Field(..., description="Session UUID obtained from POST /sessions")
-    query: str = Field(..., min_length=1, max_length=4096)
-    model: Optional[str] = Field(None, description="Override the default Groq model")
-    document_ids: Optional[List[str]] = Field(
-        None, description="Restrict retrieval to specific document IDs"
+    session_id: str = Field(..., description="Session UUID from POST /api/v1/sessions")
+    query: str = Field(..., min_length=1, max_length=4096, description="User's raw message")
+    model: Optional[str] = Field(
+        None, description="Override default generation model (must be in allowlist)"
     )
+    top_k: int = Field(20, ge=1, le=100, description="Candidates per retrieval path")
+    top_n: int = Field(5, ge=1, le=20, description="Chunks kept after reranking")
     temperature: float = Field(0.2, ge=0.0, le=2.0)
     max_tokens: int = Field(1024, ge=64, le=8192)
-    use_cache: bool = Field(True, description="Return cached response if available")
+    use_cache: bool = Field(True, description="Serve cached answer if available")
 
 
-class SourceChunk(BaseModel):
-    document_id: str
-    filename: str
-    chunk_index: int
-    score: float
+# ── SSE helpers ───────────────────────────────────────────────────────────────
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-class ChatResponse(BaseModel):
-    session_id: str
-    answer: str
-    sources: List[SourceChunk]
-    cached: bool = False
+# ── Pipeline ──────────────────────────────────────────────────────────────────
 
+async def _stream_pipeline(
+    req: ChatRequest,
+    redis,
+) -> AsyncIterator[str]:
+    """
+    Core generator that drives the full RAG pipeline and yields SSE lines.
+    Consumed by the StreamingResponse.
+    """
+    session_id = req.session_id
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+    # ── Step 1: corpus version + cache check ──────────────────────────────────
+    corpus_version = await get_corpus_version(session_id)
 
-async def _run_rag_pipeline(req: ChatRequest) -> tuple[str, list]:
-    """Run retrieval → rerank → LLM. Returns (answer, reranked_chunks)."""
-    # 1. Retrieve
-    candidates = await hybrid_retrieve(
-        query=req.query,
-        document_ids=req.document_ids,
+    if req.use_cache:
+        # We need the rewritten query to build the cache key, but for a cache
+        # hit we want to avoid the rewrite round-trip. Attempt a cache lookup
+        # with the raw query first (fast path for exact repeat questions).
+        cached = await get_cached_response(session_id, corpus_version, req.query)
+        if cached:
+            logger.info(
+                "chat.cache_hit",
+                session_id=session_id,
+                corpus_version=corpus_version,
+            )
+            yield _sse(
+                {
+                    "type": "cached",
+                    "answer": cached["answer"],
+                    "sources": cached.get("sources", []),
+                }
+            )
+            return
+
+    # ── Step 2: load session history ──────────────────────────────────────────
+    history = await get_session_history(redis, session_id)
+
+    # ── Step 3: contextual query rewriting ────────────────────────────────────
+    rewritten = await rewrite_query(
+        chat_history=history,
+        latest_query=req.query,
+    )
+    yield _sse({"type": "rewritten_query", "content": rewritten})
+
+    # Second cache check with rewritten query (catches paraphrases)
+    if req.use_cache and rewritten != req.query:
+        cached = await get_cached_response(session_id, corpus_version, rewritten)
+        if cached:
+            logger.info(
+                "chat.cache_hit_rewritten",
+                session_id=session_id,
+                corpus_version=corpus_version,
+            )
+            yield _sse(
+                {
+                    "type": "cached",
+                    "answer": cached["answer"],
+                    "sources": cached.get("sources", []),
+                }
+            )
+            return
+
+    # ── Step 4: hybrid search ─────────────────────────────────────────────────
+    candidates: List[Document] = await hybrid_search(
+        query=rewritten,
+        session_id=session_id,
+        top_k=req.top_k,
     )
     if not candidates:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No relevant context found. Please upload documents first.",
+        yield _sse(
+            {
+                "type": "error",
+                "detail": (
+                    "No relevant context found for this session. "
+                    "Upload documents first via POST /api/v1/documents/upload."
+                ),
+            }
         )
+        return
 
-    # 2. Rerank
-    top_chunks = await rerank(query=req.query, candidates=candidates)
+    # ── Step 5: cross-encoder rerank (non-blocking) ──────────────────────────
+    # rerank() is async and dispatches the CPU-bound CrossEncoder.predict()
+    # call via run_in_threadpool internally — no double-wrapping needed.
+    top_docs: List[Document] = await rerank(
+        query=rewritten, docs=candidates, top_n=req.top_n
+    )
 
-    # 3. LLM
-    answer = await chat_completion(
-        query=req.query,
-        chunks=top_chunks,
+    # ── Step 6: stream LLM generation ────────────────────────────────────────
+    full_answer_parts: List[str] = []
+
+    async for sse_line in generate_rag_stream(
+        query=rewritten,
+        context_docs=top_docs,
         model=req.model,
         temperature=req.temperature,
         max_tokens=req.max_tokens,
-    )
+    ):
+        # Accumulate tokens for persistence; forward every SSE line verbatim
+        try:
+            payload = json.loads(sse_line.removeprefix("data: ").strip())
+            if payload.get("type") == "token":
+                full_answer_parts.append(payload["content"])
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        yield sse_line
 
-    return answer, top_chunks
+    # ── Step 7: persist turn + write cache ───────────────────────────────────
+    full_answer = "".join(full_answer_parts)
+    if full_answer:
+        await append_turn(redis, session_id, "user", req.query)
+        await append_turn(redis, session_id, "assistant", full_answer)
+
+        if req.use_cache:
+            sources = [
+                {
+                    "doc_id": doc.doc_id,
+                    "filename": doc.filename,
+                    "chunk_index": doc.chunk_index,
+                    "score": round(doc.score, 4),
+                }
+                for doc in top_docs
+            ]
+            await set_cached_response(
+                session_id=session_id,
+                corpus_version=corpus_version,
+                rewritten_query=rewritten,
+                answer=full_answer,
+                sources=sources,
+            )
+            logger.info(
+                "chat.response_cached",
+                session_id=session_id,
+                corpus_version=corpus_version,
+            )
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
-
-@router.post(
-    "",
-    response_model=ChatResponse,
-    summary="Send a message and receive a RAG-grounded response",
-)
-async def chat(
-    _: AuthDep,
-    redis: RedisDep,
-    req: ChatRequest,
-) -> ChatResponse:
-    # Session history
-    history = await get_session_history(redis, req.session_id)
-
-    # Cache lookup
-    if req.use_cache:
-        cached = await cache_get("chat", req.session_id, req.query, req.model or "default")
-        if cached:
-            logger.info("chat.cache_hit", session_id=req.session_id)
-            return ChatResponse(**cached, cached=True)
-
-    try:
-        answer, top_chunks = await _run_rag_pipeline(req)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("chat.pipeline_error", error=str(exc), session_id=req.session_id)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="RAG pipeline failed. Check server logs.",
-        )
-
-    # Persist turn
-    await append_turn(redis, req.session_id, "user", req.query)
-    await append_turn(redis, req.session_id, "assistant", answer)
-
-    response_data = {
-        "session_id": req.session_id,
-        "answer": answer,
-        "sources": [
-            {
-                "document_id": c.document_id,
-                "filename": c.filename,
-                "chunk_index": c.chunk_index,
-                "score": c.score,
-            }
-            for c in top_chunks
-        ],
-    }
-
-    # Cache the result
-    if req.use_cache:
-        await cache_set("chat", response_data, req.session_id, req.query, req.model or "default")
-
-    return ChatResponse(**response_data)
-
+# ── Endpoint ──────────────────────────────────────────────────────────────────
 
 @router.post(
     "/stream",
     summary="Stream a RAG-grounded response via Server-Sent Events",
     response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "SSE stream of tokens. Content-Type: text/event-stream.",
+            "content": {"text/event-stream": {}},
+        }
+    },
 )
 async def chat_stream(
     _: AuthDep,
@@ -161,45 +224,25 @@ async def chat_stream(
     req: ChatRequest,
 ) -> StreamingResponse:
     """
-    Streams the LLM response as SSE.  Each event has the form:
-        data: <text_delta>\n\n
-    The stream ends with:
-        data: [DONE]\n\n
+    Full RAG pipeline delivered as a Server-Sent Event stream.
+
+    **Pipeline order**:
+    1. Redis cache lookup (corpus-version-scoped)
+    2. Session history load
+    3. Contextual query rewriting (llama-3.1-8b-instant)
+    4. Hybrid search — concurrent dense (ChromaDB) + sparse (BM25) + RRF
+    5. Cross-encoder rerank (threadpool)
+    6. Streaming generation (llama-3.3-70b-versatile)
+    7. Session history persistence + cache write
+
+    **SSE event types**: `rewritten_query` | `token` | `done` | `error` | `cached`
     """
-    # 1. Retrieve & rerank (not streamed)
-    candidates = await hybrid_retrieve(query=req.query, document_ids=req.document_ids)
-    if not candidates:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No relevant context found. Please upload documents first.",
-        )
-    top_chunks = await rerank(query=req.query, candidates=candidates)
-
-    # 2. Capture full answer for session persistence
-    full_answer_parts: list[str] = []
-
-    async def event_generator():
-        async for delta in chat_completion_stream(
-            query=req.query,
-            chunks=top_chunks,
-            model=req.model,
-            temperature=req.temperature,
-            max_tokens=req.max_tokens,
-        ):
-            full_answer_parts.append(delta)
-            yield f"data: {json.dumps({'delta': delta})}\n\n"
-
-        # Persist after stream completes
-        full_answer = "".join(full_answer_parts)
-        await append_turn(redis, req.session_id, "user", req.query)
-        await append_turn(redis, req.session_id, "assistant", full_answer)
-        yield "data: [DONE]\n\n"
-
     return StreamingResponse(
-        event_generator(),
+        _stream_pipeline(req, redis),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",   # disable Nginx buffering
         },
     )

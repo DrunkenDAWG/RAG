@@ -274,6 +274,14 @@ async def ingest_document(
     # Update in-memory BM25 index (sync, fast)
     _rebuild_bm25(session_id, chunks)
 
+    # Invalidate the Redis response cache for this session by bumping the
+    # corpus version — imported lazily to avoid a circular import at module load
+    try:
+        from app.core.cache import increment_corpus_version
+        await increment_corpus_version(session_id)
+    except Exception as exc:
+        logger.warning("ingestion.cache_version_bump_failed", error=str(exc))
+
     logger.info(
         "ingestion.complete",
         session_id=session_id,
