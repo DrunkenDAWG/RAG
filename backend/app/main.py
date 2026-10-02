@@ -22,12 +22,14 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.redis import close_redis, init_redis
 from app.services.ingestion import init_chroma
+from app.services.reranker import warm_up_reranker
 
 
 @asynccontextmanager
@@ -39,6 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("app.starting")
     await init_redis()
     init_chroma()
+    await run_in_threadpool(warm_up_reranker)  # pre-load cross-encoder off the event loop
     logger.info("app.ready")
 
     yield

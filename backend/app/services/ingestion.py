@@ -1,74 +1,117 @@
 """
 app/services/ingestion.py
 ──────────────────────────
-Document ingestion pipeline:
-  1. Parse uploaded file (PDF / DOCX / plain-text)
-  2. Chunk text with token-aware splitter
-  3. Embed chunks via SentenceTransformer
-  4. Upsert into ChromaDB collection
+Phase 2 — Multi-tenant ingestion pipeline.
 
-All public functions are async-safe; CPU-bound embedding is offloaded
-to a thread-pool executor so the event loop remains unblocked.
+Design:
+  • Each session gets its own ChromaDB collection scoped by session_id.
+  • A per-session BM25Okapi index is kept in-memory and rebuilt on every
+    ingest so that sparse retrieval always reflects the current corpus.
+  • Chunking uses tiktoken (cl100k_base) at exactly 500 tokens with a
+    50-token overlap — no word-boundary approximations.
+  • Embedding and text-extraction are offloaded via run_in_threadpool so
+    the FastAPI event loop is never blocked.
+  • Metadata attached to every chunk:
+      session_id      – tenant scope
+      doc_id          – stable SHA-256 fingerprint of file content
+      chunk_id        – "{doc_id}__chunk_{index}"
+      corpus_version  – monotonically incremented per session on each ingest
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import io
-import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import chromadb
+import tiktoken
 from chromadb import Collection
+from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# ── Constants ─────────────────────────────────────────────────────────────────
+CHUNK_SIZE_TOKENS: int = 500
+CHUNK_OVERLAP_TOKENS: int = 50
+_TIKTOKEN_ENCODING: str = "cl100k_base"
+
 # ── Module-level singletons ───────────────────────────────────────────────────
 _chroma_client: Optional[chromadb.PersistentClient] = None
-_collection: Optional[Collection] = None
 _embedder: Optional[SentenceTransformer] = None
 
-CHUNK_SIZE_TOKENS = 512
-CHUNK_OVERLAP_TOKENS = 64
+# Per-session state
+# { session_id -> Collection }
+_session_collections: Dict[str, Collection] = {}
+# { session_id -> BM25Okapi }
+_session_bm25: Dict[str, BM25Okapi] = {}
+# { session_id -> corpus_version }
+_session_versions: Dict[str, int] = {}
+# { session_id -> tokenised corpus for BM25 rebuilds }
+_session_corpus_tokens: Dict[str, List[List[str]]] = {}
 
 
 # ── Initialisation ────────────────────────────────────────────────────────────
 
 def init_chroma() -> None:
-    """Initialise ChromaDB client & default collection (called from lifespan)."""
-    global _chroma_client, _collection
+    """Create the persistent ChromaDB client. Called once from app lifespan."""
+    global _chroma_client
     settings = get_settings()
     Path(settings.chroma_persist_dir).mkdir(parents=True, exist_ok=True)
     _chroma_client = chromadb.PersistentClient(path=settings.chroma_persist_dir)
-    _collection = _chroma_client.get_or_create_collection(
-        name=settings.chroma_collection_name,
-        metadata={"hnsw:space": "cosine"},
-    )
-    logger.info(
-        "chroma.ready",
-        collection=settings.chroma_collection_name,
-        path=settings.chroma_persist_dir,
-    )
+    logger.info("chroma.client_ready", path=settings.chroma_persist_dir)
 
 
-def get_collection() -> Collection:
-    if _collection is None:
-        raise RuntimeError("ChromaDB not initialised. Call init_chroma() first.")
-    return _collection
+def _require_chroma() -> chromadb.PersistentClient:
+    if _chroma_client is None:
+        raise RuntimeError("ChromaDB not initialised — call init_chroma() first.")
+    return _chroma_client
 
 
-def _get_embedder() -> SentenceTransformer:
+def _get_or_create_session_collection(session_id: str) -> Collection:
+    """Return (or lazily create) the ChromaDB collection for a session."""
+    if session_id not in _session_collections:
+        client = _require_chroma()
+        # Collection name must be 3-63 chars and match [a-zA-Z0-9_-]
+        safe_name = f"s_{hashlib.sha256(session_id.encode()).hexdigest()[:32]}"
+        col = client.get_or_create_collection(
+            name=safe_name,
+            metadata={"hnsw:space": "cosine", "session_id": session_id},
+        )
+        _session_collections[session_id] = col
+        logger.info("chroma.session_collection_ready", session_id=session_id, name=safe_name)
+    return _session_collections[session_id]
+
+
+def get_session_collection(session_id: str) -> Collection:
+    return _get_or_create_session_collection(session_id)
+
+
+def get_session_bm25(session_id: str) -> Optional[BM25Okapi]:
+    """Return the current BM25 index for a session, or None if empty."""
+    return _session_bm25.get(session_id)
+
+
+# ── Embedder ──────────────────────────────────────────────────────────────────
+
+def _load_embedder() -> SentenceTransformer:
     global _embedder
     if _embedder is None:
         settings = get_settings()
         _embedder = SentenceTransformer(settings.embedding_model_name)
         logger.info("embedder.loaded", model=settings.embedding_model_name)
     return _embedder
+
+
+def _embed_sync(texts: List[str]) -> List[List[float]]:
+    embedder = _load_embedder()
+    vectors = embedder.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+    return vectors.tolist()
 
 
 # ── Text extraction ───────────────────────────────────────────────────────────
@@ -80,116 +123,67 @@ def _extract_text_pdf(data: bytes) -> str:
 
 
 def _extract_text_docx(data: bytes) -> str:
-    from docx import Document
+    from docx import Document  # type: ignore[import]
     doc = Document(io.BytesIO(data))
     return "\n".join(p.text for p in doc.paragraphs)
 
 
-def _extract_text(filename: str, data: bytes) -> str:
+def _extract_text_sync(filename: str, data: bytes) -> str:
     ext = Path(filename).suffix.lower()
     if ext == ".pdf":
         return _extract_text_pdf(data)
     if ext in {".docx", ".doc"}:
         return _extract_text_docx(data)
-    # Fallback: treat as UTF-8 plain text
     return data.decode("utf-8", errors="replace")
 
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
 
-def _chunk_text(text: str, chunk_size: int = CHUNK_SIZE_TOKENS, overlap: int = CHUNK_OVERLAP_TOKENS) -> List[str]:
+def _chunk_text_sync(text: str) -> List[str]:
     """
-    Simple word-boundary chunker. For production consider tiktoken-based
-    splitting for exact token counts.
+    Token-exact chunker: 500-token windows with 50-token overlap.
+    Uses tiktoken cl100k_base (GPT-4 / text-embedding-3 vocabulary).
     """
-    import tiktoken
-    enc = tiktoken.get_encoding("cl100k_base")
-    tokens = enc.encode(text)
+    enc = tiktoken.get_encoding(_TIKTOKEN_ENCODING)
+    token_ids = enc.encode(text)
     chunks: List[str] = []
     start = 0
-    while start < len(tokens):
-        end = start + chunk_size
-        chunk_tokens = tokens[start:end]
-        chunks.append(enc.decode(chunk_tokens))
-        start += chunk_size - overlap
+    step = CHUNK_SIZE_TOKENS - CHUNK_OVERLAP_TOKENS  # 450 tokens per step
+
+    while start < len(token_ids):
+        end = min(start + CHUNK_SIZE_TOKENS, len(token_ids))
+        chunk_text = enc.decode(token_ids[start:end])
+        if chunk_text.strip():
+            chunks.append(chunk_text)
+        if end == len(token_ids):
+            break
+        start += step
+
     return chunks
 
 
-# ── Embedding ─────────────────────────────────────────────────────────────────
+# ── BM25 management ───────────────────────────────────────────────────────────
 
-def _embed_sync(texts: List[str]) -> List[List[float]]:
-    embedder = _get_embedder()
-    vectors = embedder.encode(texts, normalize_embeddings=True, show_progress_bar=False)
-    return vectors.tolist()
+def _tokenise_for_bm25(text: str) -> List[str]:
+    return text.lower().split()
 
 
-async def _embed_async(texts: List[str]) -> List[List[float]]:
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _embed_sync, texts)
-
-
-# ── Public API ────────────────────────────────────────────────────────────────
-
-async def ingest_document(
-    filename: str,
-    data: bytes,
-    metadata: Optional[dict] = None,
-) -> dict:
+def _rebuild_bm25(session_id: str, new_chunks: List[str]) -> None:
     """
-    Parse, chunk, embed, and store a document.
-
-    Returns a summary dict with document_id and chunk_count.
+    Append new chunk tokens to the session corpus and rebuild BM25Okapi.
+    Rebuilding is O(N) but N (total chunks per session) stays manageable.
     """
-    doc_id = _stable_doc_id(filename, data)
-    collection = get_collection()
-
-    # Check for duplicate (idempotent upsert)
-    existing = collection.get(where={"document_id": doc_id}, limit=1)
-    if existing["ids"]:
-        logger.info("ingestion.duplicate_skipped", doc_id=doc_id, filename=filename)
-        return {"document_id": doc_id, "chunk_count": 0, "status": "already_exists"}
-
-    # Extract & chunk
-    loop = asyncio.get_event_loop()
-    text = await loop.run_in_executor(None, _extract_text, filename, data)
-    chunks = _chunk_text(text)
-    if not chunks:
-        raise ValueError(f"No text could be extracted from '{filename}'.")
-
-    logger.info("ingestion.chunked", doc_id=doc_id, chunk_count=len(chunks))
-
-    # Embed (offloaded to thread-pool)
-    embeddings = await _embed_async(chunks)
-
-    # Build ChromaDB payload
-    chunk_ids = [f"{doc_id}__chunk_{i}" for i in range(len(chunks))]
-    meta_base = {
-        "document_id": doc_id,
-        "filename": filename,
-        **(metadata or {}),
-    }
-    metas = [{**meta_base, "chunk_index": i} for i in range(len(chunks))]
-
-    collection.upsert(
-        ids=chunk_ids,
-        embeddings=embeddings,
-        documents=chunks,
-        metadatas=metas,
+    existing = _session_corpus_tokens.get(session_id, [])
+    new_tokenised = [_tokenise_for_bm25(c) for c in new_chunks]
+    merged = existing + new_tokenised
+    _session_corpus_tokens[session_id] = merged
+    _session_bm25[session_id] = BM25Okapi(merged)
+    logger.debug(
+        "bm25.rebuilt",
+        session_id=session_id,
+        total_chunks=len(merged),
+        new_chunks=len(new_tokenised),
     )
-
-    logger.info("ingestion.complete", doc_id=doc_id, chunk_count=len(chunks))
-    return {"document_id": doc_id, "chunk_count": len(chunks), "status": "ingested"}
-
-
-async def delete_document(document_id: str) -> int:
-    """Remove all chunks belonging to a document. Returns deleted chunk count."""
-    collection = get_collection()
-    existing = collection.get(where={"document_id": document_id})
-    ids = existing["ids"]
-    if ids:
-        collection.delete(ids=ids)
-    logger.info("ingestion.deleted", document_id=document_id, chunks_removed=len(ids))
-    return len(ids)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -198,3 +192,133 @@ def _stable_doc_id(filename: str, data: bytes) -> str:
     digest = hashlib.sha256(data).hexdigest()[:24]
     safe_name = Path(filename).stem[:32]
     return f"{safe_name}_{digest}"
+
+
+def _next_corpus_version(session_id: str) -> int:
+    version = _session_versions.get(session_id, 0) + 1
+    _session_versions[session_id] = version
+    return version
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
+async def ingest_document(
+    filename: str,
+    data: bytes,
+    session_id: str,
+    extra_metadata: Optional[Dict] = None,
+) -> Dict:
+    """
+    Parse, chunk, embed, and store a document scoped to *session_id*.
+
+    Metadata stored per chunk:
+        session_id      str   – tenant scope
+        doc_id          str   – SHA-256 content fingerprint
+        chunk_id        str   – "{doc_id}__chunk_{i}"
+        corpus_version  int   – monotonically incremented per session
+
+    Returns a summary dict: {doc_id, chunk_count, corpus_version, status}.
+    """
+    doc_id = _stable_doc_id(filename, data)
+    collection = _get_or_create_session_collection(session_id)
+
+    # Idempotency: skip if this exact document is already in this session
+    existing = collection.get(where={"doc_id": doc_id}, limit=1)
+    if existing["ids"]:
+        logger.info(
+            "ingestion.duplicate_skipped",
+            session_id=session_id,
+            doc_id=doc_id,
+            filename=filename,
+        )
+        return {
+            "doc_id": doc_id,
+            "chunk_count": 0,
+            "corpus_version": _session_versions.get(session_id, 0),
+            "status": "already_exists",
+        }
+
+    # ── CPU-bound work in thread-pool ─────────────────────────────────────────
+    text: str = await run_in_threadpool(_extract_text_sync, filename, data)
+    chunks: List[str] = await run_in_threadpool(_chunk_text_sync, text)
+
+    if not chunks:
+        raise ValueError(f"No extractable text found in '{filename}'.")
+
+    embeddings: List[List[float]] = await run_in_threadpool(_embed_sync, chunks)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    corpus_version = _next_corpus_version(session_id)
+
+    chunk_ids = [f"{doc_id}__chunk_{i}" for i in range(len(chunks))]
+    metadatas = [
+        {
+            "session_id": session_id,
+            "doc_id": doc_id,
+            "chunk_id": f"{doc_id}__chunk_{i}",
+            "corpus_version": corpus_version,
+            "filename": filename,
+            "chunk_index": i,
+            **(extra_metadata or {}),
+        }
+        for i in range(len(chunks))
+    ]
+
+    collection.upsert(
+        ids=chunk_ids,
+        embeddings=embeddings,
+        documents=chunks,
+        metadatas=metadatas,
+    )
+
+    # Update in-memory BM25 index (sync, fast)
+    _rebuild_bm25(session_id, chunks)
+
+    logger.info(
+        "ingestion.complete",
+        session_id=session_id,
+        doc_id=doc_id,
+        filename=filename,
+        chunk_count=len(chunks),
+        corpus_version=corpus_version,
+    )
+    return {
+        "doc_id": doc_id,
+        "chunk_count": len(chunks),
+        "corpus_version": corpus_version,
+        "status": "ingested",
+    }
+
+
+async def delete_document(session_id: str, doc_id: str) -> int:
+    """
+    Remove all chunks for *doc_id* from *session_id*'s collection and
+    rebuild the BM25 index without those chunks.
+
+    Returns number of chunks removed.
+    """
+    collection = _get_or_create_session_collection(session_id)
+    result = collection.get(where={"doc_id": doc_id})
+    ids = result["ids"]
+
+    if not ids:
+        return 0
+
+    collection.delete(ids=ids)
+
+    # Rebuild BM25 from the remaining corpus by re-querying ChromaDB
+    remaining = collection.get(include=["documents"])
+    remaining_docs: List[str] = remaining.get("documents") or []
+    _session_corpus_tokens[session_id] = []  # reset
+    if remaining_docs:
+        _rebuild_bm25(session_id, remaining_docs)
+    else:
+        _session_bm25.pop(session_id, None)
+
+    logger.info(
+        "ingestion.deleted",
+        session_id=session_id,
+        doc_id=doc_id,
+        chunks_removed=len(ids),
+    )
+    return len(ids)
