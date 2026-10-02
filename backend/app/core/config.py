@@ -8,9 +8,9 @@ os.environ directly so that the config is validated once at startup.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import List
+from typing import List, Union
 
-from pydantic import AnyUrl, Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -73,8 +73,8 @@ class Settings(BaseSettings):
 
     @field_validator("default_model_name")
     @classmethod
-    def _default_in_allowed(cls, v: str, info) -> str:
-        allowed = info.data.get("model_names", [])
+    def _default_in_allowed(cls, v: str, info: ValidationInfo) -> str:
+        allowed = (info.data or {}).get("model_names", [])
         if isinstance(allowed, str):
             allowed = [x.strip() for x in allowed.split(",") if x.strip()]
         if allowed and v not in allowed:

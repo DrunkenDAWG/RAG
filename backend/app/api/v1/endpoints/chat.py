@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 from typing import AsyncIterator, List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 

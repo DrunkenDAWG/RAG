@@ -21,12 +21,23 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
+import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
+
+_cache_dir = os.environ.get("HF_HOME", "")
+if not _cache_dir or _cache_dir.startswith("/nonexistent"):
+    _cache_dir = os.path.join(tempfile.gettempdir(), "rag_hf_cache")
+    os.makedirs(_cache_dir, exist_ok=True)
+    os.environ["HF_HOME"] = _cache_dir
+    os.environ["SENTENCE_TRANSFORMERS_HOME"] = _cache_dir
+    os.environ["TRANSFORMERS_CACHE"] = _cache_dir
+    os.environ["TORCH_HOME"] = _cache_dir
 
 import chromadb
 import tiktoken
-from chromadb import Collection
+from chromadb.api.models.Collection import Collection
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 from starlette.concurrency import run_in_threadpool
@@ -117,15 +128,23 @@ def _embed_sync(texts: List[str]) -> List[List[float]]:
 # ── Text extraction ───────────────────────────────────────────────────────────
 
 def _extract_text_pdf(data: bytes) -> str:
-    from pypdf import PdfReader
-    reader = PdfReader(io.BytesIO(data))
-    return "\n".join(page.extract_text() or "" for page in reader.pages)
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    except Exception as exc:
+        logger.warning("ingestion.pdf_extraction_failed", error=str(exc))
+        return data.decode("utf-8", errors="replace")
 
 
 def _extract_text_docx(data: bytes) -> str:
-    from docx import Document  # type: ignore[import]
-    doc = Document(io.BytesIO(data))
-    return "\n".join(p.text for p in doc.paragraphs)
+    try:
+        import docx  # type: ignore[import-untyped,import-not-found]
+        doc = docx.Document(io.BytesIO(data))
+        return "\n".join(p.text for p in doc.paragraphs)
+    except Exception as exc:
+        logger.warning("ingestion.docx_extraction_failed", error=str(exc))
+        return data.decode("utf-8", errors="replace")
 
 
 def _extract_text_sync(filename: str, data: bytes) -> str:

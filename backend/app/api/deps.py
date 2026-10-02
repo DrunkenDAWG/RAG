@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header
 
 from app.core.config import Settings, get_settings
 from app.core.redis import get_redis_client
@@ -35,14 +35,13 @@ RedisDep = Annotated[Redis, Depends(redis_dep)]
 # ── Optional API-key guard (for future auth layer) ────────────────────────────
 
 async def verify_api_key(
-    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
-    settings: Settings = Depends(settings_dep),
+    _x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+    _settings: Settings = Depends(settings_dep),
 ) -> None:
     """
     Placeholder auth guard. In production, compare against a stored secret.
     Currently a no-op so all requests are allowed.
     """
-    # TODO: replace with real secret comparison when auth is enabled
     pass
 
 

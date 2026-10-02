@@ -10,8 +10,7 @@ import hashlib
 import json
 from typing import Any, Optional
 
-import redis.asyncio as aioredis
-from redis.asyncio import Redis
+from redis.asyncio import Redis, from_url as redis_from_url
 from redis.exceptions import RedisError
 
 from app.core.config import get_settings
@@ -27,7 +26,7 @@ async def init_redis() -> None:
     """Create the global async Redis client. Called from app lifespan."""
     global _redis_client
     settings = get_settings()
-    _redis_client = aioredis.from_url(
+    _redis_client = redis_from_url(
         settings.redis_url,
         encoding="utf-8",
         decode_responses=True,
@@ -45,7 +44,10 @@ async def close_redis() -> None:
     """Gracefully close the Redis connection pool."""
     global _redis_client
     if _redis_client is not None:
-        await _redis_client.aclose()
+        if hasattr(_redis_client, "aclose"):
+            await _redis_client.aclose()
+        elif hasattr(_redis_client, "close"):
+            await _redis_client.close()
         _redis_client = None
         logger.info("redis.closed")
 

@@ -20,7 +20,6 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
-_SESSION_NS = "session"
 _MAX_HISTORY_TURNS = 50
 
 

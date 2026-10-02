@@ -43,7 +43,7 @@ from app.services.reranker import warm_up_reranker
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     # ── Startup ───────────────────────────────────────────────────────────────
     configure_logging()
     logger = get_logger("app.lifespan")
