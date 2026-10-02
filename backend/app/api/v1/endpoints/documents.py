@@ -8,14 +8,18 @@ Document management endpoints:
 """
 from __future__ import annotations
 
-from typing import List
+from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
 from app.api.deps import AuthDep
 from app.core.logging import get_logger
-from app.services.ingestion import delete_document, get_collection, ingest_document
+from app.services.ingestion import (
+    delete_document,
+    get_session_collection,
+    ingest_document,
+)
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -54,7 +58,10 @@ class DeleteResult(BaseModel):
 async def upload_documents(
     _: AuthDep,
     files: List[UploadFile] = File(..., description="PDF, DOCX, or plain-text files"),
+    x_session_id: Annotated[Optional[str], Header(alias="X-Session-Id")] = None,
+    session_id: Optional[str] = Form(None),
 ) -> List[IngestResult]:
+    active_session_id = x_session_id or session_id or "default"
     results: List[IngestResult] = []
     for upload in files:
         data = await upload.read()
@@ -69,7 +76,8 @@ async def upload_documents(
             summary = await ingest_document(
                 filename=upload.filename or "unknown",
                 data=data,
-                metadata={"content_type": upload.content_type or "application/octet-stream"},
+                session_id=active_session_id,
+                extra_metadata={"content_type": upload.content_type or "application/octet-stream"},
             )
         except Exception as exc:
             logger.error("ingestion.failed", filename=upload.filename, error=str(exc))
@@ -81,7 +89,7 @@ async def upload_documents(
         results.append(
             IngestResult(
                 filename=upload.filename or "unknown",
-                document_id=summary["document_id"],
+                document_id=summary["doc_id"],
                 chunk_count=summary["chunk_count"],
                 status=summary["status"],
             )
@@ -94,8 +102,12 @@ async def upload_documents(
     response_model=List[DocumentMeta],
     summary="List all ingested documents",
 )
-async def list_documents(_: AuthDep) -> List[DocumentMeta]:
-    collection = get_collection()
+async def list_documents(
+    _: AuthDep,
+    x_session_id: Annotated[Optional[str], Header(alias="X-Session-Id")] = None,
+) -> List[DocumentMeta]:
+    active_session_id = x_session_id or "default"
+    collection = get_session_collection(active_session_id)
     # Fetch all metadata (no embedding needed)
     result = collection.get(include=["metadatas"])
     if not result["metadatas"]:
@@ -104,7 +116,7 @@ async def list_documents(_: AuthDep) -> List[DocumentMeta]:
     # Aggregate chunks per document_id
     doc_map: dict = {}
     for meta in result["metadatas"]:
-        doc_id = meta.get("document_id", "")
+        doc_id = meta.get("doc_id", "")
         filename = meta.get("filename", "")
         if doc_id not in doc_map:
             doc_map[doc_id] = {"filename": filename, "chunk_count": 0}
@@ -121,11 +133,17 @@ async def list_documents(_: AuthDep) -> List[DocumentMeta]:
     response_model=DeleteResult,
     summary="Delete a document and all its chunks",
 )
-async def remove_document(_: AuthDep, document_id: str) -> DeleteResult:
-    removed = await delete_document(document_id)
+async def remove_document(
+    _: AuthDep,
+    document_id: str,
+    x_session_id: Annotated[Optional[str], Header(alias="X-Session-Id")] = None,
+) -> DeleteResult:
+    active_session_id = x_session_id or "default"
+    removed = await delete_document(session_id=active_session_id, doc_id=document_id)
     if removed == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document '{document_id}' not found.",
         )
     return DeleteResult(document_id=document_id, chunks_removed=removed)
+
