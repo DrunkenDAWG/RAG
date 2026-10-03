@@ -52,6 +52,7 @@ from transformers import AutoTokenizer  # type: ignore[import-untyped]
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.services.vision import (
+    VisionError,
     describe_image,
     describe_images,
     prepare_image,
@@ -243,26 +244,32 @@ def _extract_text_pdf(data: bytes) -> Tuple[str, Optional[List[int]]]:
     return _join_pages(page_texts)
 
 
-async def _extract_pdf_with_figures(data: bytes) -> Tuple[str, Optional[List[int]]]:
+async def _extract_pdf_with_figures(
+    data: bytes,
+) -> Tuple[str, Optional[List[int]], int]:
     """
     PDF text layer plus vision-generated text for embedded images. Each
     figure's text is appended to its own page, so page citations still point
     at the page the figure is on.
+
+    Returns (text, page_starts, figures_failed).
     """
     page_texts, images = await run_in_threadpool(
         _read_pdf_sync, data, vision_available()
     )
     if page_texts is None:
-        return data.decode("utf-8", errors="replace"), None
+        return data.decode("utf-8", errors="replace"), None, 0
 
+    failed = 0
     if images:
-        descriptions = await describe_images([jpeg for _, jpeg in images])
+        descriptions, failed = await describe_images([jpeg for _, jpeg in images])
         for (p_idx, _), desc in zip(images, descriptions):
             if desc:
                 # One paragraph per figure so the chunker keeps it together
                 desc = re.sub(r"\n\s*\n+", "\n", desc.strip())
                 page_texts[p_idx] += f"\n\n[Figure on page {p_idx + 1}]\n{desc}"
-    return _join_pages(page_texts)
+    text, page_starts = _join_pages(page_texts)
+    return text, page_starts, failed
 
 
 async def _extract_image_text(data: bytes) -> str:
@@ -272,7 +279,10 @@ async def _extract_image_text(data: bytes) -> str:
     jpeg = await run_in_threadpool(prepare_image, data)
     if jpeg is None:
         raise ValueError("Unsupported, corrupt, or too-small image.")
-    text = await describe_image(jpeg)
+    try:
+        text = await describe_image(jpeg)
+    except VisionError:
+        raise ValueError("The vision model is temporarily unavailable — please try again shortly.")
     if not text:
         raise ValueError("Could not extract any text or diagram content from the image.")
     return text
@@ -550,7 +560,8 @@ async def ingest_document(
         corpus_version, filename, page, page_end (PDFs only).
     Parent texts stored in Redis as parent:{parent_id}.
 
-    Returns: {doc_id, chunk_count, corpus_version, status}
+    Returns: {doc_id, chunk_count, corpus_version, status, figures_failed}
+    (figures_failed is only present for freshly ingested documents)
     """
     doc_id = _stable_doc_id(filename, data)
     collection = _get_or_create_session_collection(session_id)
@@ -566,8 +577,9 @@ async def ingest_document(
     # CPU-bound work offloaded to threadpool; images/figures → text via vision
     ext = Path(filename).suffix.lower()
     page_starts: Optional[List[int]] = None
+    figures_failed = 0
     if ext == ".pdf":
-        text, page_starts = await _extract_pdf_with_figures(data)
+        text, page_starts, figures_failed = await _extract_pdf_with_figures(data)
     elif ext in IMAGE_EXTENSIONS:
         text = await _extract_image_text(data)
     else:
@@ -623,7 +635,8 @@ async def ingest_document(
                 filename=filename, parent_count=len(parent_ids),
                 chunk_count=len(child_ids), corpus_version=corpus_version)
     return {"doc_id": doc_id, "chunk_count": len(child_ids),
-            "corpus_version": corpus_version, "status": "ingested"}
+            "corpus_version": corpus_version, "status": "ingested",
+            "figures_failed": figures_failed}
 
 
 async def delete_document(session_id: str, doc_id: str) -> int:

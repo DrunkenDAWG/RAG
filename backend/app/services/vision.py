@@ -11,15 +11,15 @@ Each image is turned into plain text (verbatim transcription of visible
 text + a factual description of any diagram/chart) so it flows through
 the normal chunk → embed → BM25 pipeline unchanged.
 
-Degrades gracefully: with no GEMINI_API_KEY or on API failure, callers get
-None and ingestion continues with the text layer only.
+Degrades gracefully: with no GEMINI_API_KEY, PDFs ingest with their text
+layer only. API failures are counted and reported back as upload warnings.
 """
 from __future__ import annotations
 
 import asyncio
 import base64
 import io
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import httpx
 from tenacity import (
@@ -65,6 +65,10 @@ _VISION_PROMPT: str = (
 
 class _RetryableVisionError(Exception):
     """Gemini rate-limit / transient server error."""
+
+
+class VisionError(Exception):
+    """All vision models failed for an image."""
 
 
 def vision_available() -> bool:
@@ -126,13 +130,12 @@ async def _call_gemini(model: str, jpeg: bytes) -> str:
                 }},
             ],
         }],
-        "generationConfig": {
-            "temperature": 0.0,
-            "maxOutputTokens": 1024,
-            # Transcription doesn't benefit from reasoning; ~2x faster without it
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 1024},
     }
+    if model == GEMINI_VISION_MODELS[0]:
+        # Transcription doesn't benefit from reasoning; ~2x faster without it.
+        # (The lite fallback doesn't think and rejects this field with a 400.)
+        payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             _GEMINI_URL.format(model=model),
@@ -152,7 +155,8 @@ async def _call_gemini(model: str, jpeg: bytes) -> str:
 async def describe_image(jpeg: bytes) -> Optional[str]:
     """
     Convert one prepared image (see prepare_image) to text.
-    Returns None for decorative images, when vision is unavailable, or on error.
+    Returns None for decorative images or when vision is disabled.
+    Raises VisionError if every model failed (rate limits, outages, ...).
     """
     if not vision_available():
         return None
@@ -175,18 +179,25 @@ async def describe_image(jpeg: bytes) -> Optional[str]:
             except Exception as exc:
                 logger.warning("vision.describe_failed", model=model, error=str(exc)[:200])
         else:
-            return None
+            raise VisionError("Vision model unavailable")
 
     if not text or text.strip().upper().rstrip(".") == _DECORATIVE_SENTINEL:
         return None
     return text
 
 
-async def describe_images(images: List[bytes]) -> List[Optional[str]]:
-    """Describe many prepared images concurrently (bounded by a semaphore)."""
+async def describe_images(images: List[bytes]) -> Tuple[List[Optional[str]], int]:
+    """
+    Describe many prepared images concurrently (bounded by a semaphore).
+    Returns (texts, failed_count); texts[i] is None for decorative or failed images.
+    """
     if not images:
-        return []
-    results = await asyncio.gather(*(describe_image(img) for img in images))
+        return [], 0
+    results = await asyncio.gather(
+        *(describe_image(img) for img in images), return_exceptions=True
+    )
+    texts = [r if isinstance(r, str) else None for r in results]
+    failed = sum(isinstance(r, BaseException) for r in results)
     logger.info("vision.batch_done", images=len(images),
-                described=sum(r is not None for r in results))
-    return list(results)
+                described=sum(t is not None for t in texts), failed=failed)
+    return texts, failed

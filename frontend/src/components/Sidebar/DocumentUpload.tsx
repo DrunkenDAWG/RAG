@@ -76,7 +76,10 @@ export function DocumentUpload({ uploads, disabled, onUpload }: Props) {
                 />
               </div>
               {u.error && (
-                <p className="text-[10px] text-red-400 truncate">{u.error}</p>
+                <p className="text-[10px] text-red-400">{u.error}</p>
+              )}
+              {u.warning && (
+                <p className="text-[10px] text-amber-400">{u.warning}</p>
               )}
             </div>
           ))}

@@ -25,11 +25,13 @@ export async function deleteSession(sessionId: string): Promise<void> {
 
 // ── Documents ──────────────────────────────────────────────────────────────────
 
+export type UploadResult = Document & { warning?: string | null };
+
 export async function uploadDocuments(
   sessionId: string,
   files: File[],
   onProgress?: (pct: number) => void,
-): Promise<Document[]> {
+): Promise<UploadResult[]> {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     files.forEach((f) => form.append("files", f));
@@ -54,13 +56,22 @@ export async function uploadDocuments(
               document_id: d.document_id ?? d.doc_id,
               filename: d.filename,
               chunk_count: d.chunk_count,
+              warning: d.warning,
             })),
           );
         } catch {
           reject(new Error("Invalid response from upload endpoint"));
         }
       } else {
-        reject(new Error(`Upload failed: ${xhr.status} ${xhr.statusText}`));
+        // Prefer the backend's explanation (e.g. why an image couldn't be read)
+        let detail = `Upload failed: ${xhr.status} ${xhr.statusText}`;
+        try {
+          const body = JSON.parse(xhr.responseText);
+          if (typeof body.detail === "string") detail = body.detail;
+        } catch {
+          // non-JSON error body — keep the generic message
+        }
+        reject(new Error(detail));
       }
     });
     xhr.addEventListener("error", () => reject(new Error("Network error during upload")));

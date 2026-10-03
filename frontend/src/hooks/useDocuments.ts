@@ -8,6 +8,7 @@ export interface UploadState {
   progress: number;  // 0-100
   status: "uploading" | "done" | "error";
   error?: string;
+  warning?: string;
 }
 
 export function useDocuments(sessionId: string | null) {
@@ -43,17 +44,28 @@ export function useDocuments(sessionId: string | null) {
       }));
       setUploads(initial);
 
+      let needsAttention = false;
       try {
-        await uploadDocuments(sessionId, files, (pct) => {
+        const results = await uploadDocuments(sessionId, files, (pct) => {
           setUploads((prev) =>
             prev.map((u) => ({ ...u, progress: pct })),
           );
         });
+        const warnings = new Map(
+          results.filter((r) => r.warning).map((r) => [r.filename, r.warning as string]),
+        );
+        needsAttention = warnings.size > 0;
         setUploads((prev) =>
-          prev.map((u) => ({ ...u, progress: 100, status: "done" })),
+          prev.map((u) => ({
+            ...u,
+            progress: 100,
+            status: "done",
+            warning: warnings.get(u.filename),
+          })),
         );
         await refresh();
       } catch (err) {
+        needsAttention = true;
         setUploads((prev) =>
           prev.map((u) => ({
             ...u,
@@ -62,8 +74,8 @@ export function useDocuments(sessionId: string | null) {
           })),
         );
       } finally {
-        // Clear upload indicators after 3 s
-        setTimeout(() => setUploads([]), 3000);
+        // Clear upload indicators (longer when there's something to read)
+        setTimeout(() => setUploads([]), needsAttention ? 10000 : 3000);
       }
     },
     [sessionId, refresh],

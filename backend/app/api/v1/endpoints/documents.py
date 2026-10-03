@@ -39,6 +39,7 @@ class IngestResult(BaseModel):
     document_id: str
     chunk_count: int
     status: str
+    warning: Optional[str] = None
 
 
 class DocumentMeta(BaseModel):
@@ -95,12 +96,19 @@ async def upload_documents(
         if Path(upload.filename or "").suffix.lower() == ".pdf":
             await run_in_threadpool(save_pdf, active_session_id, summary["doc_id"], data)
 
+        warning = None
+        if summary.get("figures_failed"):
+            warning = (
+                f"{summary['figures_failed']} image(s) couldn't be converted to text "
+                "(vision model unavailable). Delete and re-upload to retry."
+            )
         results.append(
             IngestResult(
                 filename=upload.filename or "unknown",
                 document_id=summary["doc_id"],
                 chunk_count=summary["chunk_count"],
                 status=summary["status"],
+                warning=warning,
             )
         )
     return results
