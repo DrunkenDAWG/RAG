@@ -33,38 +33,38 @@ export function CitationBadge({ citation, onCitationClick }: BadgeProps) {
     <span ref={ref} className="relative inline-block align-middle mx-1 my-0.5">
       <button
         onClick={handleClick}
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-900/60 hover:bg-indigo-600 border border-indigo-400/50 hover:border-indigo-300 text-indigo-300 hover:text-white text-[11px] font-semibold tracking-wide transition-all shadow-sm hover:scale-105 active:scale-95 cursor-pointer"
-        title={`Click to highlight in Knowledge Base: ${citation.source.filename}`}
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-subtle hover:bg-canvas border border-border-subtle hover:border-border-strong text-text-primary text-[10px] font-mono transition-all cursor-pointer shadow-subtle active:scale-95"
+        title={`Highlight in Documents: ${citation.source.filename}`}
       >
-        <BookOpen size={10} className="text-indigo-400 group-hover:text-white" />
+        <BookOpen size={10} className="text-text-muted" />
         <span>Doc {citation.index}</span>
       </button>
 
       {open && (
-        <div className="absolute z-50 bottom-7 left-0 w-72 rounded-xl border border-slate-600 bg-slate-800 shadow-2xl p-3 text-xs">
+        <div className="absolute z-50 bottom-7 left-0 w-72 rounded-lg border border-border-strong bg-surface shadow-dropdown p-3 text-xs">
           {/* Header */}
           <div className="flex items-start justify-between gap-2 mb-2">
-            <div className="flex items-center gap-1.5 text-indigo-400 font-semibold">
-              <BookOpen size={12} />
+            <div className="flex items-center gap-1.5 text-text-primary font-medium">
+              <BookOpen size={12} className="text-text-secondary" />
               <span className="truncate max-w-[200px]">{citation.source.filename}</span>
             </div>
             <button
               onClick={() => setOpen(false)}
-              className="text-slate-500 hover:text-slate-300 shrink-0"
+              className="text-text-muted hover:text-text-primary shrink-0 transition-colors"
             >
               <X size={12} />
             </button>
           </div>
 
           {/* Metadata */}
-          <div className="flex items-center gap-3 text-slate-400 border-b border-slate-700 pb-2 mb-2">
-            <span>Chunk <strong className="text-slate-300">{citation.source.chunk_index}</strong></span>
-            <span>Score <strong className="text-slate-300">{citation.source.score.toFixed(3)}</strong></span>
+          <div className="flex items-center gap-3 text-text-muted font-mono text-[11px] border-b border-border-subtle pb-2 mb-2">
+            <span>Chunk: <strong className="text-text-secondary font-normal">{citation.source.chunk_index}</strong></span>
+            <span>Score: <strong className="text-text-secondary font-normal">{citation.source.score.toFixed(3)}</strong></span>
           </div>
 
           {/* Doc ID */}
-          <p className="text-slate-500 truncate font-mono text-[10px]">
-            {citation.source.doc_id}
+          <p className="text-text-muted truncate font-mono text-[10px]">
+            ID: {citation.source.doc_id}
           </p>
         </div>
       )}

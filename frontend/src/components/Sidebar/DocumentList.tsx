@@ -1,5 +1,5 @@
 // src/components/Sidebar/DocumentList.tsx
-import { FileText, Trash2, Layers } from "lucide-react";
+import { FileText, Trash2, Files } from "lucide-react";
 import clsx from "clsx";
 import type { Document } from "../../types";
 
@@ -12,25 +12,25 @@ interface Props {
 
 export function DocumentList({ documents, loading, onDelete, highlightedDocId }: Props) {
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1.5 px-2 py-1">
-        <Layers size={12} className="text-slate-400" />
-        <span className="text-xs font-semibold uppercase tracking-widest text-slate-400">
-          Documents
-        </span>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between px-1">
+        <div className="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider text-text-muted">
+          <Files size={12} />
+          <span>Knowledge Base</span>
+        </div>
         {documents.length > 0 && (
-          <span className="ml-auto text-xs font-medium text-slate-500 bg-slate-700 rounded-full px-1.5">
+          <span className="text-[10px] font-mono text-text-muted bg-subtle border border-border-subtle rounded px-1.5">
             {documents.length}
           </span>
         )}
       </div>
 
       {loading && (
-        <p className="px-3 py-2 text-xs text-slate-500 animate-pulse">Loading…</p>
+        <p className="px-2 py-2 text-xs font-mono text-text-muted animate-pulse">Loading documents…</p>
       )}
 
       {!loading && documents.length === 0 && (
-        <p className="px-3 py-2 text-xs text-slate-500 italic">
+        <p className="px-2 py-2 text-xs text-text-muted italic">
           No documents uploaded yet
         </p>
       )}
@@ -46,43 +46,38 @@ export function DocumentList({ documents, loading, onDelete, highlightedDocId }:
             <div
               key={doc.document_id}
               className={clsx(
-                "group flex items-start gap-2 rounded-lg px-3 py-2 transition-all duration-300",
+                "group flex items-start gap-2.5 rounded-lg px-2.5 py-2 transition-all border text-xs",
                 isHighlighted
-                  ? "bg-indigo-950/80 border border-indigo-400 ring-2 ring-indigo-400/50 shadow-md shadow-indigo-500/30 scale-[1.02]"
-                  : "hover:bg-slate-700/50 border border-transparent",
+                  ? "bg-subtle border-border-strong text-white shadow-subtle ring-1 ring-white/20"
+                  : "border-transparent text-text-secondary hover:bg-subtle/50 hover:text-text-primary hover:border-border-subtle",
               )}
             >
               <FileText
                 size={13}
                 className={clsx(
                   "shrink-0 mt-0.5 transition-colors",
-                  isHighlighted ? "text-indigo-400 animate-bounce" : "text-slate-400",
+                  isHighlighted ? "text-white" : "text-text-muted group-hover:text-text-secondary",
                 )}
               />
               <div className="flex-1 min-w-0">
-                <p
-                  className={clsx(
-                    "truncate text-xs leading-tight transition-colors",
-                    isHighlighted ? "text-indigo-200 font-semibold" : "text-slate-200",
-                  )}
-                >
+                <p className="truncate text-xs leading-tight font-medium">
                   {doc.filename}
                 </p>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <p className="text-xs text-slate-500">{doc.chunk_count} chunks</p>
+                <div className="flex items-center gap-2 mt-0.5 font-mono text-[10px] text-text-muted">
+                  <span>{doc.chunk_count} chunks</span>
                   {isHighlighted && (
-                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">
-                      • Cited
+                    <span className="text-white font-medium">
+                      [Cited]
                     </span>
                   )}
                 </div>
               </div>
               <button
                 onClick={() => onDelete(doc.document_id)}
-                title="Remove document"
-                className="shrink-0 mt-0.5 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                title="Delete document"
+                className="shrink-0 mt-0.5 text-text-muted hover:text-white opacity-0 group-hover:opacity-100 transition-opacity p-0.5 cursor-pointer"
               >
-                <Trash2 size={12} />
+                <Trash2 size={11} />
               </button>
             </div>
           );

@@ -1,6 +1,6 @@
 // src/components/Study/QuizModal.tsx
 import { useState } from "react";
-import { CheckCircle2, XCircle, Lightbulb, Trophy, RotateCcw, X, HelpCircle, ArrowRight } from "lucide-react";
+import { CheckCircle2, XCircle, Trophy, RotateCcw, X, HelpCircle, ArrowRight, BookOpen } from "lucide-react";
 import clsx from "clsx";
 import type { Quiz } from "../../types";
 
@@ -55,26 +55,26 @@ export function QuizModal({ quiz, topic, onClose }: Props) {
   const optionLabels = ["A", "B", "C", "D"];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl flex flex-col overflow-hidden max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-canvas/80 backdrop-blur-md animate-in fade-in duration-150">
+      <div className="relative w-full max-w-2xl bg-surface border border-border-strong rounded-xl shadow-modal flex flex-col overflow-hidden max-h-[90vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/90">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle bg-surface">
           <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30">
-              <HelpCircle size={18} />
+            <div className="flex items-center justify-center w-7 h-7 rounded-md bg-subtle border border-border-subtle text-text-secondary">
+              <HelpCircle size={15} />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-xs uppercase tracking-wider font-bold text-indigo-400">
+                <span className="text-xs font-semibold text-text-primary tracking-tight">
                   Active Recall Quiz
                 </span>
-                <span className="text-xs text-slate-500">•</span>
-                <span className="text-xs text-slate-400 font-medium truncate max-w-xs">
+                <span className="text-xs text-text-muted">•</span>
+                <span className="text-xs font-mono text-text-muted truncate max-w-xs">
                   {topic}
                 </span>
               </div>
               {!isFinished && (
-                <p className="text-xs text-slate-500 mt-0.5">
+                <p className="text-[11px] font-mono text-text-muted mt-0.5">
                   Question {currentIndex + 1} of {questions.length}
                 </p>
               )}
@@ -83,46 +83,46 @@ export function QuizModal({ quiz, topic, onClose }: Props) {
 
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+            className="p-1.5 text-text-muted hover:text-text-primary rounded-md hover:bg-subtle transition-colors cursor-pointer"
             title="Close Quiz"
           >
-            <X size={18} />
+            <X size={16} />
           </button>
         </div>
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6">
           {!isFinished ? (
-            <div className="flex flex-col gap-6">
+            <div className="flex flex-col gap-5">
               {/* Progress bar */}
-              <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+              <div className="w-full h-1 bg-canvas border border-border-subtle rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-300"
+                  className="h-full bg-white transition-all duration-300"
                   style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }}
                 />
               </div>
 
               {/* Question Text */}
-              <div className="p-4 rounded-xl bg-slate-800/40 border border-slate-700/50">
-                <h3 className="text-base sm:text-lg font-semibold text-slate-100 leading-snug">
+              <div className="p-4 rounded-lg bg-subtle/40 border border-border-subtle">
+                <h3 className="text-sm sm:text-base font-semibold text-text-primary leading-snug">
                   {currentQuestion.question}
                 </h3>
               </div>
 
               {/* Options */}
-              <div className="flex flex-col gap-2.5">
+              <div className="flex flex-col gap-2">
                 {currentQuestion.options.map((option, idx) => {
                   const isSelected = selectedOption === option;
                   const isCorrect = option === currentQuestion.correct_answer;
-                  let optionStyles = "bg-slate-800/60 border-slate-700/80 hover:bg-slate-800 hover:border-indigo-500/50 text-slate-200";
+                  let optionStyles = "bg-subtle/50 border-border-subtle hover:border-border-strong text-text-primary";
 
                   if (isAnswerSubmitted) {
                     if (isCorrect) {
-                      optionStyles = "bg-emerald-500/15 border-emerald-500/80 text-emerald-100";
+                      optionStyles = "bg-subtle border-emerald-500/70 text-emerald-300";
                     } else if (isSelected) {
-                      optionStyles = "bg-rose-500/15 border-rose-500/80 text-rose-100";
+                      optionStyles = "bg-subtle border-red-500/70 text-red-300";
                     } else {
-                      optionStyles = "bg-slate-800/30 border-slate-700/40 text-slate-500 opacity-60";
+                      optionStyles = "bg-subtle/20 border-border-subtle text-text-muted opacity-40";
                     }
                   }
 
@@ -132,29 +132,29 @@ export function QuizModal({ quiz, topic, onClose }: Props) {
                       disabled={isAnswerSubmitted}
                       onClick={() => handleSelectOption(option)}
                       className={clsx(
-                        "group flex items-start gap-3.5 p-3.5 rounded-xl border text-left text-sm transition-all duration-150",
+                        "group flex items-start gap-3 p-3 rounded-lg border text-left text-xs sm:text-sm transition-all",
                         optionStyles,
                         !isAnswerSubmitted && "cursor-pointer active:scale-[0.99]",
                       )}
                     >
                       <span
                         className={clsx(
-                          "shrink-0 flex items-center justify-center w-6 h-6 rounded-lg text-xs font-bold transition-colors",
+                          "shrink-0 flex items-center justify-center w-5 h-5 rounded font-mono text-[11px] transition-colors",
                           isAnswerSubmitted && isCorrect
-                            ? "bg-emerald-500 text-white"
+                            ? "bg-emerald-500 text-black font-semibold"
                             : isAnswerSubmitted && isSelected
-                            ? "bg-rose-500 text-white"
-                            : "bg-slate-700/60 text-slate-300 group-hover:bg-indigo-600 group-hover:text-white",
+                            ? "bg-red-500 text-white font-semibold"
+                            : "bg-canvas border border-border-subtle text-text-muted group-hover:text-text-primary",
                         )}
                       >
                         {optionLabels[idx] ?? idx + 1}
                       </span>
                       <span className="flex-1 mt-0.5 leading-snug">{option}</span>
                       {isAnswerSubmitted && isCorrect && (
-                        <CheckCircle2 size={18} className="shrink-0 text-emerald-400 mt-0.5" />
+                        <CheckCircle2 size={16} className="shrink-0 text-emerald-400 mt-0.5" />
                       )}
                       {isAnswerSubmitted && isSelected && !isCorrect && (
-                        <XCircle size={18} className="shrink-0 text-rose-400 mt-0.5" />
+                        <XCircle size={16} className="shrink-0 text-red-400 mt-0.5" />
                       )}
                     </button>
                   );
@@ -163,13 +163,11 @@ export function QuizModal({ quiz, topic, onClose }: Props) {
 
               {/* Explanation box */}
               {isAnswerSubmitted && (
-                <div className="flex gap-3 p-4 rounded-xl bg-slate-800/60 border border-slate-700/70 animate-in fade-in slide-in-from-top-2 duration-200">
-                  <div className="shrink-0 mt-0.5 text-amber-400">
-                    <Lightbulb size={18} />
-                  </div>
-                  <div className="flex-1 text-xs sm:text-sm">
-                    <p className="font-semibold text-slate-200 mb-1">Concept Explanation</p>
-                    <p className="text-slate-400 leading-relaxed">
+                <div className="flex gap-3 p-3.5 rounded-lg bg-subtle/60 border border-border-subtle text-xs animate-in fade-in duration-150">
+                  <BookOpen size={15} className="shrink-0 text-text-secondary mt-0.5" />
+                  <div className="flex-1 leading-relaxed">
+                    <p className="font-medium text-text-primary mb-0.5">Explanation</p>
+                    <p className="text-text-muted leading-relaxed">
                       {currentQuestion.explanation}
                     </p>
                   </div>
@@ -178,59 +176,51 @@ export function QuizModal({ quiz, topic, onClose }: Props) {
             </div>
           ) : (
             /* Results Screen */
-            <div className="flex flex-col items-center justify-center text-center py-8 gap-5">
-              <div className="flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-tr from-amber-500/20 to-yellow-500/20 border border-amber-500/30 text-amber-400">
-                <Trophy size={40} />
+            <div className="flex flex-col items-center justify-center text-center py-8 gap-4">
+              <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-subtle border border-border-subtle text-text-primary">
+                <Trophy size={28} />
               </div>
 
               <div>
-                <h3 className="text-xl font-bold text-white mb-1">Quiz Completed!</h3>
-                <p className="text-sm text-slate-400">
-                  Topic: <strong className="text-slate-200">{topic}</strong>
+                <h3 className="text-base font-semibold text-text-primary mb-1">Assessment Complete</h3>
+                <p className="text-xs font-mono text-text-muted">
+                  Topic: {topic}
                 </p>
               </div>
 
-              <div className="flex items-center gap-6 px-6 py-4 rounded-2xl bg-slate-800/60 border border-slate-700/80">
-                <div className="text-center">
-                  <p className="text-2xl font-black text-indigo-400">
+              <div className="flex items-center gap-6 px-6 py-3.5 rounded-lg bg-subtle border border-border-subtle">
+                <div className="text-center font-mono">
+                  <p className="text-xl font-bold text-text-primary">
                     {calculateScore()} / {questions.length}
                   </p>
-                  <p className="text-xs uppercase tracking-wider text-slate-500 font-semibold mt-0.5">
+                  <p className="text-[10px] uppercase tracking-wider text-text-muted mt-0.5">
                     Score
                   </p>
                 </div>
-                <div className="w-px h-8 bg-slate-700" />
-                <div className="text-center">
-                  <p className="text-2xl font-black text-emerald-400">
+                <div className="w-px h-7 bg-border-subtle" />
+                <div className="text-center font-mono">
+                  <p className="text-xl font-bold text-text-primary">
                     {Math.round((calculateScore() / questions.length) * 100)}%
                   </p>
-                  <p className="text-xs uppercase tracking-wider text-slate-500 font-semibold mt-0.5">
+                  <p className="text-[10px] uppercase tracking-wider text-text-muted mt-0.5">
                     Accuracy
                   </p>
                 </div>
               </div>
 
-              <p className="text-xs sm:text-sm text-slate-400 max-w-md">
-                {calculateScore() === questions.length
-                  ? "🔥 Perfect score! You have thoroughly mastered these notes."
-                  : calculateScore() >= questions.length / 2
-                  ? "👍 Great effort! Review the explanations above to solidify any weak points."
-                  : "💡 Keep practicing! Ask your Socratic Tutor to explain the difficult parts."}
-              </p>
-
-              <div className="flex items-center gap-3 mt-4">
+              <div className="flex items-center gap-2.5 mt-3">
                 <button
                   onClick={handleRestart}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm font-medium text-slate-200 transition-colors"
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-subtle hover:bg-canvas border border-border-subtle text-xs font-medium text-text-primary transition-all cursor-pointer"
                 >
-                  <RotateCcw size={15} />
-                  Retake Quiz
+                  <RotateCcw size={13} />
+                  Retake
                 </button>
                 <button
                   onClick={onClose}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold text-white transition-colors"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white text-black hover:bg-neutral-200 text-xs font-medium transition-all cursor-pointer"
                 >
-                  Return to Study Hub
+                  Return to Hub
                 </button>
               </div>
             </div>
@@ -239,27 +229,27 @@ export function QuizModal({ quiz, topic, onClose }: Props) {
 
         {/* Footer */}
         {!isFinished && (
-          <div className="flex items-center justify-between px-6 py-3.5 border-t border-slate-800 bg-slate-900/90">
-            <span className="text-xs text-slate-500">
+          <div className="flex items-center justify-between px-6 py-3 border-t border-border-subtle bg-surface">
+            <span className="text-xs text-text-muted font-mono">
               {isAnswerSubmitted
                 ? selectedOption === currentQuestion.correct_answer
-                  ? "✅ Correct answer!"
-                  : "❌ Incorrect answer"
-                : "Select an option to check your knowledge"}
+                  ? "✓ Correct"
+                  : "✗ Incorrect"
+                : "Select an answer choice"}
             </span>
 
             {isAnswerSubmitted && (
               <button
                 onClick={handleNext}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs sm:text-sm font-semibold transition-colors"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-white text-black hover:bg-neutral-200 text-xs font-medium transition-all cursor-pointer"
               >
                 {currentIndex < questions.length - 1 ? (
                   <>
-                    Next Question <ArrowRight size={15} />
+                    Next Question <ArrowRight size={13} />
                   </>
                 ) : (
                   <>
-                    Finish & View Score <Trophy size={15} />
+                    View Results <Trophy size={13} />
                   </>
                 )}
               </button>

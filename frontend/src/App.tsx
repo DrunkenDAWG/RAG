@@ -67,40 +67,40 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-100 font-sans overflow-hidden">
+    <div className="flex h-screen bg-canvas bg-grid-dots text-text-primary font-sans overflow-hidden antialiased">
       {/* ── Left Pane: Knowledge Base & Study Tools ───────────────────────── */}
-      <aside className="flex flex-col w-80 lg:w-96 shrink-0 border-r border-slate-700/60 bg-slate-900/90 backdrop-blur z-20">
+      <aside className="flex flex-col w-80 lg:w-96 shrink-0 border-r border-border-subtle bg-surface/95 backdrop-blur-md z-20">
         {/* Hub Branding */}
-        <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-700/60 bg-slate-900">
-          <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 shadow-md shadow-indigo-600/30">
-            <GraduationCap size={18} className="text-white" />
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-border-subtle bg-surface">
+          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-subtle border border-border-subtle text-white">
+            <GraduationCap size={16} />
           </div>
           <div>
-            <div className="flex items-center gap-1.5">
-              <h1 className="text-sm font-bold tracking-tight text-white">Student Study Hub</h1>
-              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                AI Tutor
+            <div className="flex items-center gap-2">
+              <h1 className="text-sm font-semibold tracking-tight text-white">Study Hub</h1>
+              <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-subtle text-text-secondary border border-border-subtle">
+                v1.0
               </span>
             </div>
-            <p className="text-xs text-slate-400">Knowledge Base & Active Recall</p>
+            <p className="text-xs text-text-muted">RAG Knowledge Base & Active Recall</p>
           </div>
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex p-2 bg-slate-950/60 border-b border-slate-800">
+        <div className="flex p-2 bg-canvas/40 border-b border-border-subtle gap-1">
           <button
             onClick={() => setActiveTab("documents")}
             className={clsx(
-              "flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer",
+              "flex-1 flex items-center justify-center gap-2 py-1.5 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer",
               activeTab === "documents"
-                ? "bg-slate-800 text-indigo-300 shadow border border-slate-700/80"
-                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/50",
+                ? "bg-subtle text-white border border-border-subtle shadow-sm"
+                : "text-text-muted hover:text-text-secondary hover:bg-subtle/50",
             )}
           >
-            <BookOpen size={14} />
-            <span>Notes & Docs</span>
+            <BookOpen size={13} />
+            <span>Documents</span>
             {documents.length > 0 && (
-              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-slate-700 text-slate-300">
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-canvas text-text-secondary border border-border-subtle">
                 {documents.length}
               </span>
             )}
@@ -109,19 +109,19 @@ export default function App() {
           <button
             onClick={() => setActiveTab("tools")}
             className={clsx(
-              "flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer",
+              "flex-1 flex items-center justify-center gap-2 py-1.5 px-3 rounded-md text-xs font-medium transition-colors cursor-pointer",
               activeTab === "tools"
-                ? "bg-slate-800 text-indigo-300 shadow border border-slate-700/80"
-                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/50",
+                ? "bg-subtle text-white border border-border-subtle shadow-sm"
+                : "text-text-muted hover:text-text-secondary hover:bg-subtle/50",
             )}
           >
-            <Brain size={14} className="text-indigo-400" />
+            <Brain size={13} />
             <span>Study Tools</span>
           </button>
         </div>
 
         {/* Left Pane Tab Body */}
-        <div className="flex-1 overflow-y-auto flex flex-col gap-5 p-4">
+        <div className="flex-1 overflow-y-auto flex flex-col gap-4 p-4">
           {activeTab === "documents" ? (
             <>
               {/* Study Session Switcher */}
@@ -136,7 +136,7 @@ export default function App() {
               />
 
               {/* Uploads and Document list */}
-              <div className="border-t border-slate-700/40 pt-4 flex flex-col gap-4">
+              <div className="border-t border-border-subtle pt-4 flex flex-col gap-4">
                 <DocumentUpload
                   uploads={uploads}
                   disabled={!activeId}
@@ -168,17 +168,17 @@ export default function App() {
         </div>
 
         {/* Sidebar footer status */}
-        <div className="px-4 py-3 border-t border-slate-800 bg-slate-900/60 text-xs text-slate-500 flex items-center justify-between">
-          <span className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-            Study Companion Online
+        <div className="px-4 py-3 border-t border-border-subtle bg-surface text-xs text-text-muted flex items-center justify-between font-mono">
+          <span className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span className="text-[11px] text-text-secondary">Connected</span>
           </span>
-          <span className="text-[11px] text-slate-600">Groq (Chat) • Gemini (Recall)</span>
+          <span className="text-[10px] text-text-muted">Groq • Gemini • BGE</span>
         </div>
       </aside>
 
       {/* ── Right Pane: Socratic Tutor Chat ───────────────────────────────── */}
-      <main className="flex-1 flex flex-col overflow-hidden relative">
+      <main className="flex-1 flex flex-col overflow-hidden relative bg-canvas">
         <ChatWindow
           activeSession={activeSession}
           onCitationClick={handleCitationClick}
@@ -205,4 +205,3 @@ export default function App() {
     </div>
   );
 }
-

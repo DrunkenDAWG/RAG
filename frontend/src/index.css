@@ -1,11 +1,11 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   color-scheme: dark;
 }
 
@@ -15,64 +15,132 @@
 
 body {
   margin: 0;
-  background: #0a0f1a;
-  color: #e2e8f0;
+  background-color: #09090b;
+  color: #ffffff;
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+::selection {
+  background: #ffffff;
+  color: #000000;
 }
+
+/* Linear / Vercel style dotted grid background */
+.bg-grid-dots {
+  background-size: 24px 24px;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.12) 1px, transparent 1px);
+}
+
+/* Minimalist scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #27272a;
+  border-radius: 9999px;
 }
 
-/* Markdown prose tweaks inside dark bubbles */
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* Typography & Markdown Prose */
 .prose h1, .prose h2, .prose h3 {
-  color: #f1f5f9;
-  margin-top: 0.75em;
-  margin-bottom: 0.4em;
+  color: #ffffff;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin-top: 0.85em;
+  margin-bottom: 0.35em;
 }
-.prose p { margin: 0.4em 0; }
-.prose ul, .prose ol { padding-left: 1.25em; }
-.prose li { margin: 0.2em 0; }
+
+.prose p {
+  margin: 0.45em 0;
+  line-height: 1.6;
+  color: #d4d4d8;
+}
+
+.prose ul, .prose ol {
+  padding-left: 1.25em;
+  margin: 0.4em 0;
+  color: #d4d4d8;
+}
+
+.prose li {
+  margin: 0.2em 0;
+}
+
+.prose strong {
+  color: #ffffff;
+  font-weight: 600;
+}
+
 .prose code {
-  background: #1e293b;
-  border: 1px solid #334155;
+  background: #18181b;
+  border: 1px solid #27272a;
   border-radius: 4px;
-  padding: 0.1em 0.35em;
-  font-size: 0.82em;
-  color: #93c5fd;
+  padding: 0.15em 0.4em;
+  font-size: 0.85em;
+  font-family: 'JetBrains Mono', monospace;
+  color: #e4e4e7;
 }
+
 .prose pre {
-  background: #0f172a;
-  border: 1px solid #1e293b;
+  background: #121214;
+  border: 1px solid #27272a;
   border-radius: 8px;
-  padding: 1em;
+  padding: 0.875rem 1rem;
   overflow-x: auto;
+  margin: 0.75em 0;
 }
+
 .prose pre code {
   background: none;
   border: none;
   padding: 0;
-  color: #e2e8f0;
+  font-size: 0.825em;
+  color: #f4f4f5;
 }
-.prose a { color: #818cf8; text-decoration: underline; }
+
+.prose a {
+  color: #ffffff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .prose blockquote {
-  border-left: 3px solid #4f46e5;
-  padding-left: 1em;
-  color: #94a3b8;
-  margin: 0.5em 0;
+  border-left: 2px solid #3f3f46;
+  padding-left: 0.875rem;
+  color: #a1a1aa;
+  margin: 0.6em 0;
+  font-style: italic;
 }
-.prose table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
-.prose th { background: #1e293b; padding: 0.4em 0.75em; text-align: left; }
-.prose td { padding: 0.4em 0.75em; border-bottom: 1px solid #1e293b; }
+
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+  margin: 0.75em 0;
+}
+
+.prose th {
+  background: #18181b;
+  border-bottom: 1px solid #27272a;
+  padding: 0.5em 0.75em;
+  text-align: left;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.prose td {
+  padding: 0.5em 0.75em;
+  border-bottom: 1px solid #27272a;
+  color: #d4d4d8;
+}

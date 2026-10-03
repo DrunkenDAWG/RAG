@@ -7,20 +7,44 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
+        sans: [
+          "Inter",
+          "-apple-system",
+          "BlinkMacSystemFont",
+          "Segoe UI",
+          "Roboto",
+          "Helvetica Neue",
+          "sans-serif",
+        ],
+        mono: [
+          "JetBrains Mono",
+          "Fira Code",
+          "ui-monospace",
+          "SFMono-Regular",
+          "Menlo",
+          "Monaco",
+          "Consolas",
+          "monospace",
+        ],
       },
       colors: {
-        slate: {
-          950: "#0a0f1a",
+        canvas: "#09090b",
+        surface: "#121214",
+        subtle: "#18181b",
+        border: {
+          subtle: "#27272a",
+          strong: "#3f3f46",
+        },
+        text: {
+          primary: "#ffffff",
+          secondary: "#a1a1aa",
+          muted: "#71717a",
         },
       },
-      typography: {
-        DEFAULT: {
-          css: {
-            color: "#e2e8f0",
-            maxWidth: "none",
-          },
-        },
+      boxShadow: {
+        subtle: "0 1px 2px 0 rgba(0, 0, 0, 0.4)",
+        dropdown: "0 4px 20px 0 rgba(0, 0, 0, 0.6)",
+        modal: "0 16px 40px -8px rgba(0, 0, 0, 0.8), 0 0 0 1px #27272a",
       },
     },
   },

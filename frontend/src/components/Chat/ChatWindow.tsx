@@ -23,39 +23,39 @@ export function ChatWindow({ activeSession, onCitationClick }: Props) {
   }, [messages]);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-canvas">
       {/* Header */}
-      <div className="flex items-center gap-3 px-6 py-4 border-b border-slate-700/60 bg-slate-900/60 backdrop-blur">
-        <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-indigo-600/20 border border-indigo-500/30">
-          <Bot size={16} className="text-indigo-400" />
+      <div className="flex items-center gap-3 px-6 py-3.5 border-b border-border-subtle bg-surface/80 backdrop-blur-md">
+        <div className="flex items-center justify-center w-7 h-7 rounded-md bg-subtle border border-border-subtle text-text-secondary">
+          <Bot size={15} />
         </div>
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-slate-100">
-              {activeSession ? activeSession.label : "Student Study Hub"}
+            <h2 className="text-xs font-semibold text-text-primary tracking-tight">
+              {activeSession ? activeSession.label : "Chat"}
             </h2>
             {tutorMode && (
-              <span className="flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-violet-600/20 text-violet-300 border border-violet-500/30">
-                <GraduationCap size={11} /> Socratic Tutor Active
+              <span className="flex items-center gap-1 text-[10px] font-mono font-medium px-2 py-0.5 rounded bg-subtle text-text-secondary border border-border-subtle">
+                <GraduationCap size={11} /> Socratic Mode
               </span>
             )}
           </div>
-          <p className="text-xs text-slate-500">
+          <p className="text-[11px] font-mono text-text-muted">
             {activeSession
               ? `${activeSession.session_id.slice(0, 8)}…`
-              : "Select a session to begin"}
+              : "No active session"}
           </p>
         </div>
         {isStreaming && (
-          <div className="ml-auto flex items-center gap-1.5 text-xs text-indigo-400">
-            <span className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse" />
-            Generating…
+          <div className="ml-auto flex items-center gap-2 text-xs font-mono text-text-muted">
+            <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+            <span>Streaming</span>
           </div>
         )}
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto py-4 space-y-2 scroll-smooth">
+      <div className="flex-1 overflow-y-auto py-6 space-y-4 scroll-smooth">
         {messages.length === 0 ? (
           <EmptyState hasSession={!!activeSession} tutorMode={tutorMode} />
         ) : (
@@ -91,24 +91,24 @@ function EmptyState({
   tutorMode?: boolean;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-4 text-center px-8 py-16">
-      <div className="flex items-center justify-center w-16 h-16 rounded-2xl bg-slate-800 border border-slate-700">
-        <MessageSquareDashed size={28} className="text-indigo-400" />
+    <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-8 py-20">
+      <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-subtle border border-border-subtle text-text-muted">
+        <MessageSquareDashed size={20} />
       </div>
       <div>
-        <h3 className="text-base font-semibold text-slate-200 mb-1">
+        <h3 className="text-sm font-semibold text-text-primary mb-1">
           {hasSession
             ? tutorMode
-              ? "Socratic Study Session Ready"
+              ? "Socratic Session Active"
               : "Ask Anything About Your Notes"
-            : "No study session selected"}
+            : "No Session Selected"}
         </h3>
-        <p className="text-sm text-slate-400 max-w-sm">
+        <p className="text-xs text-text-muted max-w-sm leading-relaxed">
           {hasSession
             ? tutorMode
-              ? "Tutor mode is active. Your study companion will guide you through concepts using questions and hints instead of giving away immediate answers."
-              : "Upload PDFs or study notes on the left, then ask questions to get grounded answers with clickable citations."
-            : "Create or select a study session from the left sidebar to get started."}
+              ? "Your tutor will guide you with targeted questions and hints to reinforce your understanding."
+              : "Upload documents to the left pane and query concepts to get cited answers."
+            : "Select or create a study session in the sidebar to begin."}
         </p>
       </div>
     </div>

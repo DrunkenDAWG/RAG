@@ -4,7 +4,7 @@ import type React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import clsx from "clsx";
-import { Bot, User, Sparkles } from "lucide-react";
+import { Bot, User, Search } from "lucide-react";
 import { CitationBadge } from "./CitationPopover";
 import type { Message, Source } from "../../types";
 
@@ -39,10 +39,10 @@ function renderContentWithCitations(
   const { content, citations, isStreaming } = message;
   if (citations.length === 0) {
     return (
-      <div className="prose prose-invert prose-sm max-w-none">
+      <div className="prose prose-invert text-xs sm:text-sm max-w-none">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
         {isStreaming && (
-          <span className="inline-block w-1.5 h-4 bg-indigo-400 animate-pulse ml-0.5 rounded-sm" />
+          <span className="inline-block w-1 h-3.5 bg-white animate-pulse ml-1 align-middle" />
         )}
       </div>
     );
@@ -65,7 +65,7 @@ function renderContentWithCitations(
 
     if (!earliestMatch) {
       parts.push(
-        <span key={key++} className="prose prose-invert prose-sm max-w-none">
+        <span key={key++} className="prose prose-invert text-xs sm:text-sm max-w-none">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{remaining}</ReactMarkdown>
         </span>,
       );
@@ -75,7 +75,7 @@ function renderContentWithCitations(
     const before = remaining.slice(0, earliestMatch.idx);
     if (before) {
       parts.push(
-        <span key={key++} className="prose prose-invert prose-sm max-w-none">
+        <span key={key++} className="prose prose-invert text-xs sm:text-sm max-w-none">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{before}</ReactMarkdown>
         </span>,
       );
@@ -96,7 +96,7 @@ function renderContentWithCitations(
     parts.push(
       <span
         key={key++}
-        className="inline-block w-1.5 h-4 bg-indigo-400 animate-pulse ml-0.5 rounded-sm"
+        className="inline-block w-1 h-3.5 bg-white animate-pulse ml-1 align-middle"
       />,
     );
   }
@@ -110,42 +110,44 @@ export function MessageBubble({ message, onCitationClick }: Props) {
   return (
     <div
       className={clsx(
-        "flex gap-3 px-4 py-3",
+        "flex gap-3 px-6 py-2",
         isUser ? "flex-row-reverse" : "flex-row",
       )}
     >
       {/* Avatar */}
       <div
         className={clsx(
-          "shrink-0 flex items-center justify-center w-8 h-8 rounded-xl mt-0.5",
-          isUser ? "bg-indigo-600" : "bg-slate-700",
+          "shrink-0 flex items-center justify-center w-7 h-7 rounded-md mt-0.5 border text-xs",
+          isUser
+            ? "bg-white text-black border-white"
+            : "bg-subtle text-text-secondary border-border-subtle",
         )}
       >
-        {isUser ? <User size={15} className="text-white" /> : <Bot size={15} className="text-indigo-400" />}
+        {isUser ? <User size={13} /> : <Bot size={13} />}
       </div>
 
       {/* Bubble */}
       <div
         className={clsx(
-          "max-w-[80%] flex flex-col gap-1.5",
+          "max-w-[82%] flex flex-col gap-1.5",
           isUser ? "items-end" : "items-start",
         )}
       >
         {/* Rewritten query badge */}
         {message.rewrittenQuery && message.rewrittenQuery !== message.content && (
-          <div className="flex items-center gap-1 text-[10px] text-slate-500 bg-slate-800/60 border border-slate-700 rounded-full px-2 py-0.5">
-            <Sparkles size={9} className="text-indigo-400" />
-            <span>Searched: <em className="text-slate-400 not-italic">{message.rewrittenQuery}</em></span>
+          <div className="flex items-center gap-1.5 text-[10px] font-mono text-text-muted bg-subtle border border-border-subtle rounded-md px-2 py-0.5">
+            <Search size={9} />
+            <span>Refined: <span className="text-text-secondary">{message.rewrittenQuery}</span></span>
           </div>
         )}
 
         {/* Content */}
         <div
           className={clsx(
-            "rounded-2xl px-4 py-3 text-sm leading-relaxed",
+            "rounded-xl px-4 py-3 text-xs sm:text-sm leading-relaxed border",
             isUser
-              ? "bg-indigo-600 text-white rounded-tr-md"
-              : "bg-slate-800/80 border border-slate-700/60 text-slate-100 rounded-tl-md",
+              ? "bg-subtle border-border-strong text-text-primary"
+              : "bg-surface/80 border-border-subtle text-text-primary",
           )}
         >
           {isUser ? (
@@ -156,7 +158,7 @@ export function MessageBubble({ message, onCitationClick }: Props) {
         </div>
 
         {/* Timestamp */}
-        <span className="text-[10px] text-slate-600 px-1">
+        <span className="text-[10px] font-mono text-text-muted px-1">
           {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </span>
       </div>
