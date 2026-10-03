@@ -17,8 +17,8 @@ export interface Document {
 export interface Source {
   doc_id: string;
   filename: string;
-  chunk_index: number;
-  score: number;
+  page?: number | null;     // first 1-based PDF page; absent for non-PDF / legacy sources
+  page_end?: number | null; // last page when the cited passage spans pages
 }
 
 export type MessageRole = "user" | "assistant" | "system";

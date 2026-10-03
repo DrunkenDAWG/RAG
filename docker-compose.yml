@@ -8,6 +8,7 @@ networks:
 # ── Named volumes ─────────────────────────────────────────────────────────────
 volumes:
   chroma-data:
+  uploads-data:
   redis-data:
 
 services:
@@ -23,12 +24,14 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       CHROMA_PERSIST_DIR: /app/data/chroma
+      UPLOAD_DIR: /app/data/uploads
       HF_HOME: /app/data/hf_cache
       SENTENCE_TRANSFORMERS_HOME: /app/data/hf_cache
     ports:
       - "8000:8000"
     volumes:
       - chroma-data:/app/data/chroma
+      - uploads-data:/app/data/uploads
     depends_on:
       redis:
         condition: service_healthy

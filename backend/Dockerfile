@@ -34,7 +34,7 @@ COPY --from=builder /install /usr/local
 COPY app/ ./app/
 
 # Data and cache persistence directory
-RUN mkdir -p /app/data/chroma /tmp/hf_cache && chown -R appuser:appgroup /app/data /tmp/hf_cache
+RUN mkdir -p /app/data/chroma /app/data/uploads /tmp/hf_cache && chown -R appuser:appgroup /app/data /tmp/hf_cache
 
 USER appuser
 

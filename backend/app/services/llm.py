@@ -35,7 +35,7 @@ from tenacity import (
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.services.retriever import Document
+from app.services.retriever import Document, to_sources
 
 logger = get_logger(__name__)
 
@@ -159,12 +159,16 @@ def _retry_policy() -> AsyncRetrying:
 # -- Prompt builders ----------------------------------------------------------
 
 def _build_context_block(docs: List[Document]) -> str:
+    # Chunk ids / scores are kept out of the prompt so the model can't echo
+    # retrieval internals into the user-facing answer.
     blocks = []
     for i, doc in enumerate(docs, start=1):
-        blocks.append(
-            f"[{i}] Source: {doc.filename} | chunk {doc.chunk_index} "
-            f"| score {doc.score:.4f}\n{doc.text}"
-        )
+        page = ""
+        if doc.page is not None:
+            page = (f" | pages {doc.page}-{doc.page_end}"
+                    if doc.page_end and doc.page_end != doc.page
+                    else f" | page {doc.page}")
+        blocks.append(f"[{i}] Source: {doc.filename}{page}\n{doc.text}")
     return "\n\n---\n\n".join(blocks)
 
 
@@ -316,15 +320,7 @@ async def generate_rag_stream(
         yield _sse({"type": "error", "detail": "Stream interrupted."})
         return
 
-    sources = [
-        {
-            "doc_id": doc.doc_id,
-            "filename": doc.filename,
-            "chunk_index": doc.chunk_index,
-            "score": round(doc.score, 4),
-        }
-        for doc in context_docs
-    ]
+    sources = to_sources(context_docs)
     yield _sse({"type": "done", "sources": sources})
     logger.info("llm.stream_complete", model=resolved_model, source_count=len(sources))
 

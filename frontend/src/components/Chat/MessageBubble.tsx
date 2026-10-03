@@ -5,12 +5,57 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import clsx from "clsx";
 import { Bot, User, Search } from "lucide-react";
-import { CitationBadge } from "./CitationPopover";
+import { CitationBadge, PreviewPageButton } from "./CitationPopover";
+import { formatPages } from "../../lib/utils";
 import type { Message, Source } from "../../types";
 
 interface Props {
   message: Message;
   onCitationClick?: (source: Source) => void;
+  onPreviewPage?: (source: Source) => void;
+}
+
+const sourceKey = (s: Source) => `${s.doc_id}::${s.page ?? ""}-${s.page_end ?? ""}`;
+
+// Sources actually cited in the answer, one entry per (document, page span)
+function citedSources(message: Message): Source[] {
+  const seen = new Set<string>();
+  const out: Source[] = [];
+  for (const { source } of message.citations) {
+    const key = sourceKey(source);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(source);
+  }
+  return out;
+}
+
+function SourcesList({
+  sources,
+  onPreviewPage,
+}: {
+  sources: Source[];
+  onPreviewPage?: (source: Source) => void;
+}) {
+  return (
+    <div className="mt-3 pt-2.5 border-t border-border-subtle flex flex-col gap-1.5">
+      <span className="text-[10px] font-mono uppercase tracking-wider text-text-muted">Sources</span>
+      {sources.map((source) => (
+        <div
+          key={sourceKey(source)}
+          className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-secondary"
+        >
+          <span>
+            📄 {source.filename}
+            {source.page ? ` — ${formatPages(source)}` : ""}
+          </span>
+          {source.page && onPreviewPage && (
+            <PreviewPageButton onClick={() => onPreviewPage(source)} />
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // Find marker for citation index (supports [1], [Doc 1], [doc 1], [Doc1])
@@ -35,6 +80,7 @@ function findMarker(text: string, index: number): { marker: string; idx: number 
 function renderContentWithCitations(
   message: Message,
   onCitationClick?: (source: Source) => void,
+  onPreviewPage?: (source: Source) => void,
 ) {
   const { content, citations, isStreaming } = message;
   if (citations.length === 0) {
@@ -86,6 +132,7 @@ function renderContentWithCitations(
         key={key++}
         citation={earliestMatch.citation}
         onCitationClick={onCitationClick}
+        onPreviewPage={onPreviewPage}
       />,
     );
 
@@ -104,8 +151,9 @@ function renderContentWithCitations(
   return <>{parts}</>;
 }
 
-export function MessageBubble({ message, onCitationClick }: Props) {
+export function MessageBubble({ message, onCitationClick, onPreviewPage }: Props) {
   const isUser = message.role === "user";
+  const sources = isUser || message.isStreaming ? [] : citedSources(message);
 
   return (
     <div
@@ -153,7 +201,10 @@ export function MessageBubble({ message, onCitationClick }: Props) {
           {isUser ? (
             <p className="whitespace-pre-wrap">{message.content}</p>
           ) : (
-            renderContentWithCitations(message, onCitationClick)
+            renderContentWithCitations(message, onCitationClick, onPreviewPage)
+          )}
+          {sources.length > 0 && (
+            <SourcesList sources={sources} onPreviewPage={onPreviewPage} />
           )}
         </div>
 

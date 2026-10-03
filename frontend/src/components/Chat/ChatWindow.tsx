@@ -1,8 +1,9 @@
 // src/components/Chat/ChatWindow.tsx
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, MessageSquareDashed, GraduationCap } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
+import { PdfPreviewModal } from "./PdfPreviewModal";
 import { useChat } from "../../hooks/useChat";
 import type { Session, Source } from "../../types";
 
@@ -16,6 +17,8 @@ export function ChatWindow({ activeSession, onCitationClick }: Props) {
   const [tutorMode, setTutorMode] = useState(false);
   const { messages, isStreaming, sendMessage, stopStreaming } = useChat(sessionId);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [previewSource, setPreviewSource] = useState<Source | null>(null);
+  const closePreview = useCallback(() => setPreviewSource(null), []);
 
   // Auto-scroll to bottom on new message / token
   useEffect(() => {
@@ -64,11 +67,21 @@ export function ChatWindow({ activeSession, onCitationClick }: Props) {
               key={msg.id}
               message={msg}
               onCitationClick={onCitationClick}
+              onPreviewPage={setPreviewSource}
             />
           ))
         )}
         <div ref={bottomRef} />
       </div>
+
+      {previewSource && sessionId && (
+        <PdfPreviewModal
+          key={`${sessionId}:${previewSource.doc_id}`}
+          sessionId={sessionId}
+          source={previewSource}
+          onClose={closePreview}
+        />
+      )}
 
       {/* Input */}
       <ChatInput

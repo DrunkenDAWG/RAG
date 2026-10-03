@@ -86,6 +86,23 @@ export async function deleteDocument(
   });
 }
 
+export async function fetchDocumentFile(
+  sessionId: string,
+  documentId: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  // Session id travels in a header (not the URL) and the backend checks the
+  // document belongs to that session before serving it.
+  const res = await fetch(
+    `${BASE}/api/v1/documents/${encodeURIComponent(documentId)}/file`,
+    { headers: { "X-Session-Id": sessionId }, signal },
+  );
+  if (!res.ok) {
+    throw new Error(res.status === 404 ? "Document file not available." : `Failed to load document: ${res.statusText}`);
+  }
+  return res.blob();
+}
+
 // ── Chat streaming ────────────────────────────────────────────────────────────
 
 export interface ChatStreamOptions {

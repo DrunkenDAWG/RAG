@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = Field(default="./data/chroma")
     chroma_collection_name: str = Field(default="rag_documents")
 
+    # ── Uploaded originals (PDF page preview) ─────────────────────────────────
+    upload_dir: str = Field(default="./data/uploads")
+
     # ── Embeddings ────────────────────────────────────────────────────────────
     embedding_model_name: str = Field(default="all-MiniLM-L6-v2")
 

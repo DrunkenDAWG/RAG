@@ -9,22 +9,24 @@ Design:
     (double-newlines / Markdown headings), then each Parent into Child chunks
     (max 400 tokens, 50-token overlap).
   - Only Child chunks stored in ChromaDB (small = precise vector match).
-  - Full Parent texts stored in Redis as parent:{pid} — never in ChromaDB
+  - Full Parent texts stored in Redis as parent:{pid} â€” never in ChromaDB
     metadata to avoid HNSW payload bloat.
   - BM25 built from Child texts for keyword-level granularity.
   - AutoTokenizer from BAAI/bge-small-en-v1.5 for accurate token counting,
     consistent with the embedding model vocabulary.
   - Metadata per Child in ChromaDB:
       session_id, doc_id, parent_id, chunk_id, chunk_index, corpus_version,
-      filename.
+      filename, page / page_end (1-based PDF page span; PDFs only).
 """
 from __future__ import annotations
 
+import bisect
 import hashlib
 import io
 import os
 import re
 import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -80,7 +82,7 @@ def init_chroma() -> None:
 
 def _require_chroma() -> chromadb.PersistentClient:
     if _chroma_client is None:
-        raise RuntimeError("ChromaDB not initialised — call init_chroma() first.")
+        raise RuntimeError("ChromaDB not initialised â€” call init_chroma() first.")
     return _chroma_client
 
 
@@ -139,7 +141,7 @@ def _load_embedder() -> SentenceTransformer:
 
 
 def _embed_sync(texts: List[str]) -> List[List[float]]:
-    """Embed document texts — no prefix (BGE: NEVER prefix documents)."""
+    """Embed document texts â€” no prefix (BGE: NEVER prefix documents)."""
     embedder = _load_embedder()
     vectors = embedder.encode(texts, normalize_embeddings=True, show_progress_bar=False)
     return vectors.tolist()
@@ -156,14 +158,25 @@ def embed_query_sync(text: str) -> List[List[float]]:
 
 # -- Text extraction ----------------------------------------------------------
 
-def _extract_text_pdf(data: bytes) -> str:
+def _extract_text_pdf(data: bytes) -> Tuple[str, Optional[List[int]]]:
+    """
+    Returns (text, page_starts) where page_starts[i] is the char offset in
+    text at which page i+1 begins. page_starts is None if parsing failed.
+    """
     try:
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(data))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
+        page_texts = [page.extract_text() or "" for page in reader.pages]
     except Exception as exc:
         logger.warning("ingestion.pdf_extraction_failed", error=str(exc))
-        return data.decode("utf-8", errors="replace")
+        return data.decode("utf-8", errors="replace"), None
+
+    page_starts: List[int] = []
+    offset = 0
+    for page_text in page_texts:
+        page_starts.append(offset)
+        offset += len(page_text) + 1  # +1 for the "\n" joiner
+    return "\n".join(page_texts), page_starts
 
 
 def _extract_text_docx(data: bytes) -> str:
@@ -176,18 +189,63 @@ def _extract_text_docx(data: bytes) -> str:
         return data.decode("utf-8", errors="replace")
 
 
-def _extract_text_sync(filename: str, data: bytes) -> str:
+def _extract_text_sync(filename: str, data: bytes) -> Tuple[str, Optional[List[int]]]:
+    """Returns (text, page_starts); page_starts is only set for parsed PDFs."""
     ext = Path(filename).suffix.lower()
     if ext == ".pdf":
         return _extract_text_pdf(data)
     if ext in {".docx", ".doc"}:
-        return _extract_text_docx(data)
-    return data.decode("utf-8", errors="replace")
+        return _extract_text_docx(data), None
+    return data.decode("utf-8", errors="replace"), None
+
+
+# -- Page tracking ------------------------------------------------------------
+
+def _encode_with_pages(
+    text: str,
+    char_offset: int,
+    page_starts: Optional[List[int]],
+) -> Tuple[List[int], List[int]]:
+    """
+    Encode text and label every token with its 1-based PDF page number.
+    char_offset is the position of text within the full document text.
+    Returns (token_ids, token_pages); token_pages is empty without page_starts.
+    """
+    if not page_starts:
+        return _encode_text(text), []
+    tok = _load_tokenizer()
+    enc = tok(text, add_special_tokens=False, return_offsets_mapping=True)
+    pages = [
+        bisect.bisect_right(page_starts, char_offset + start)
+        for start, _ in enc["offset_mapping"]
+    ]
+    return list(enc["input_ids"]), pages
+
+
+PageSpan = Tuple[int, int]  # (first_page, last_page), 1-based inclusive
+
+# A page must hold at least this share of a chunk's tokens to count toward
+# its span, so a few trailing tokens from the previous page don't shift it.
+_PAGE_SPAN_MIN_SHARE: float = 0.15
+
+
+def _page_span(token_pages: List[int]) -> Optional[PageSpan]:
+    """Page range a token window meaningfully covers, or None if unknown."""
+    if not token_pages:
+        return None
+    min_count = max(1, int(len(token_pages) * _PAGE_SPAN_MIN_SHARE))
+    significant = [p for p, c in Counter(token_pages).items() if c >= min_count]
+    if not significant:  # pathological spread â€” fall back to the majority page
+        significant = [Counter(token_pages).most_common(1)[0][0]]
+    return min(significant), max(significant)
 
 
 # -- Parent-Child Chunking ----------------------------------------------------
 
-def _split_into_parents(text: str) -> List[str]:
+def _split_into_parents(
+    text: str,
+    page_starts: Optional[List[int]] = None,
+) -> Tuple[List[str], List[List[int]]]:
     """
     Split raw text into Parent chunks (at most PARENT_MAX_TOKENS tokens).
 
@@ -195,57 +253,92 @@ def _split_into_parents(text: str) -> List[str]:
     2. Greedily merge adjacent paragraphs until Parent token budget is reached.
     3. Single paragraphs exceeding PARENT_MAX_TOKENS are sub-split on a
        sliding window with no overlap (parents serve LLM context, not search).
+
+    Returns (parent_texts, parent_token_pages); each token_pages list labels
+    the parent's tokens with PDF page numbers (empty when page_starts is None).
     """
-    paragraphs = re.split(r"(\n\n+|\n#{1,6}\s)", text)
-    paragraphs = [p.strip() for p in paragraphs if p and p.strip()]
+    pieces = re.split(r"(\n\n+|\n#{1,6}\s)", text)
 
     parents: List[str] = []
+    parent_pages: List[List[int]] = []
     current_tokens: List[int] = []
+    current_pages: List[int] = []
 
-    for para in paragraphs:
-        para_tokens = _encode_text(para)
+    def _flush(tokens: List[int], pages: List[int]) -> None:
+        parents.append(_decode_token_window(tokens))
+        parent_pages.append(pages)
+
+    pos = 0
+    for piece in pieces:
+        piece = piece or ""
+        piece_start = pos
+        pos += len(piece)
+        para = piece.strip()
+        if not para:
+            continue
+        para_start = piece_start + len(piece) - len(piece.lstrip())
+        para_tokens, para_pages = _encode_with_pages(para, para_start, page_starts)
 
         if len(para_tokens) > PARENT_MAX_TOKENS:
             if current_tokens:
-                parents.append(_decode_token_window(current_tokens))
-                current_tokens = []
+                _flush(current_tokens, current_pages)
+                current_tokens, current_pages = [], []
             for start in range(0, len(para_tokens), PARENT_MAX_TOKENS):
-                window = para_tokens[start: start + PARENT_MAX_TOKENS]
-                parents.append(_decode_token_window(window))
+                _flush(para_tokens[start: start + PARENT_MAX_TOKENS],
+                       para_pages[start: start + PARENT_MAX_TOKENS])
             continue
 
         if len(current_tokens) + len(para_tokens) <= PARENT_MAX_TOKENS:
             current_tokens.extend(para_tokens)
+            current_pages.extend(para_pages)
         else:
             if current_tokens:
-                parents.append(_decode_token_window(current_tokens))
-            current_tokens = para_tokens
+                _flush(current_tokens, current_pages)
+            current_tokens, current_pages = para_tokens, para_pages
 
     if current_tokens:
-        parents.append(_decode_token_window(current_tokens))
+        _flush(current_tokens, current_pages)
 
-    return [p for p in parents if p.strip()]
+    kept = [i for i, p in enumerate(parents) if p.strip()]
+    return [parents[i] for i in kept], [parent_pages[i] for i in kept]
 
 
-def _split_parent_into_children(parent_text: str) -> List[str]:
+def _split_parent_into_children(
+    parent_text: str,
+    parent_token_pages: Optional[List[int]] = None,
+) -> List[Tuple[str, Optional[PageSpan]]]:
     """
     Split one Parent into Child chunks (max CHILD_MAX_TOKENS,
     CHILD_OVERLAP_TOKENS sliding overlap) for embedding in ChromaDB.
+
+    Returns (child_text, page_span) pairs. The parent is re-encoded from its
+    decoded text, so child windows are mapped proportionally onto the
+    parent's original token page labels.
     """
     token_ids = _encode_text(parent_text)
     if not token_ids:
         return []
 
-    children: List[str] = []
+    n_tokens = len(token_ids)
+    n_pages = len(parent_token_pages or [])
+
+    def _window_page(start: int, end: int) -> Optional[PageSpan]:
+        if not n_pages:
+            return None
+        p_start = min(start * n_pages // n_tokens, n_pages - 1)
+        p_end = max(end * n_pages // n_tokens, p_start + 1)
+        return _page_span(parent_token_pages[p_start:p_end])  # type: ignore[index]
+
+    children: List[Tuple[str, Optional[PageSpan]]] = []
     step = CHILD_MAX_TOKENS - CHILD_OVERLAP_TOKENS  # 350 tokens per step
     start = 0
 
-    while start < len(token_ids):
-        end = min(start + CHILD_MAX_TOKENS, len(token_ids))
+    while start < n_tokens:
+        end = min(start + CHILD_MAX_TOKENS, n_tokens)
         child_text = _decode_token_window(token_ids[start:end])
         if child_text.strip():
-            children.append(child_text)
-        if end == len(token_ids):
+            children.append((child_text, _window_page(start, end)))
+        if end == n_tokens:
             break
         start += step
 
@@ -255,27 +348,32 @@ def _split_parent_into_children(parent_text: str) -> List[str]:
 def _build_parent_child_chunks(
     text: str,
     doc_id: str,
-) -> Tuple[List[str], List[str], List[str], List[str]]:
+    page_starts: Optional[List[int]] = None,
+) -> Tuple[List[str], List[str], List[str], List[str], List[Optional[PageSpan]]]:
     """
-    Returns (parent_ids, parent_texts, child_ids, child_texts).
+    Returns (parent_ids, parent_texts, child_ids, child_texts, child_pages).
     parent_id = "{doc_id}__parent_{p_idx}"
     child_id  = "{doc_id}__child_{p_idx}_{c_idx}"
+    child_pages[i] is the (first, last) PDF page span of child i, or None.
     """
-    parents = _split_into_parents(text)
+    parents, parents_token_pages = _split_into_parents(text, page_starts)
     parent_ids: List[str] = []
     parent_texts: List[str] = []
     child_ids: List[str] = []
     child_texts: List[str] = []
+    child_pages: List[Optional[PageSpan]] = []
 
-    for p_idx, parent_text in enumerate(parents):
+    for p_idx, (parent_text, token_pages) in enumerate(zip(parents, parents_token_pages)):
         pid = f"{doc_id}__parent_{p_idx}"
         parent_ids.append(pid)
         parent_texts.append(parent_text)
-        for c_idx, child_text in enumerate(_split_parent_into_children(parent_text)):
+        children = _split_parent_into_children(parent_text, token_pages)
+        for c_idx, (child_text, page) in enumerate(children):
             child_ids.append(f"{doc_id}__child_{p_idx}_{c_idx}")
             child_texts.append(child_text)
+            child_pages.append(page)
 
-    return parent_ids, parent_texts, child_ids, child_texts
+    return parent_ids, parent_texts, child_ids, child_texts, child_pages
 
 
 # -- BM25 management ----------------------------------------------------------
@@ -350,7 +448,7 @@ async def ingest_document(
 
     Child metadata in ChromaDB:
         session_id, doc_id, parent_id, chunk_id, chunk_index,
-        corpus_version, filename.
+        corpus_version, filename, page, page_end (PDFs only).
     Parent texts stored in Redis as parent:{parent_id}.
 
     Returns: {doc_id, chunk_count, corpus_version, status}
@@ -367,15 +465,15 @@ async def ingest_document(
                 "status": "already_exists"}
 
     # CPU-bound work offloaded to threadpool
-    text: str = await run_in_threadpool(_extract_text_sync, filename, data)
-    parent_ids, parent_texts, child_ids, child_texts = await run_in_threadpool(
-        _build_parent_child_chunks, text, doc_id
+    text, page_starts = await run_in_threadpool(_extract_text_sync, filename, data)
+    parent_ids, parent_texts, child_ids, child_texts, child_pages = await run_in_threadpool(
+        _build_parent_child_chunks, text, doc_id, page_starts
     )
 
     if not child_texts:
         raise ValueError(f"No extractable text found in '{filename}'.")
 
-    # Embed children — NO prefix (BGE: documents are never prefixed)
+    # Embed children â€” NO prefix (BGE: documents are never prefixed)
     embeddings: List[List[float]] = await run_in_threadpool(_embed_sync, child_texts)
 
     corpus_version = _next_corpus_version(session_id)
@@ -387,7 +485,7 @@ async def ingest_document(
     for c_idx, child_id in enumerate(child_ids):
         p_idx_str = child_id.rsplit("_", 1)[0].rsplit("_", 1)[1]
         parent_id = f"{doc_id}__parent_{p_idx_str}"
-        metadatas.append({
+        meta = {
             "session_id": session_id,
             "doc_id": doc_id,
             "parent_id": parent_id,
@@ -396,7 +494,12 @@ async def ingest_document(
             "corpus_version": corpus_version,
             "filename": filename,
             **(extra_metadata or {}),
-        })
+        }
+        # ChromaDB rejects None metadata values â€” omit pages when unknown
+        span = child_pages[c_idx]
+        if span is not None:
+            meta["page"], meta["page_end"] = span
+        metadatas.append(meta)
 
     collection.upsert(ids=child_ids, embeddings=embeddings,
                       documents=child_texts, metadatas=metadatas)

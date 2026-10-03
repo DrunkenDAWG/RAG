@@ -63,6 +63,35 @@ class Document:
     parent_id: str = ""   # Redis key suffix for parent text lookup
     metadata: Dict = field(default_factory=dict)
 
+    @property
+    def page(self) -> Optional[int]:
+        """First 1-based PDF page of the chunk, or None if unknown."""
+        page = self.metadata.get("page")
+        return int(page) if page is not None else None
+
+    @property
+    def page_end(self) -> Optional[int]:
+        """Last 1-based PDF page of the chunk (== page unless it spans pages)."""
+        page_end = self.metadata.get("page_end", self.metadata.get("page"))
+        return int(page_end) if page_end is not None else None
+
+
+def to_sources(docs: List[Document]) -> List[Dict]:
+    """
+    User-facing citation payload, one entry per context passage (index i
+    matches the LLM's [i+1] marker). Chunk ids and retrieval scores are
+    deliberately excluded — they stay internal (logs / Document objects).
+    """
+    return [
+        {
+            "doc_id": doc.doc_id,
+            "filename": doc.filename,
+            "page": doc.page,
+            "page_end": doc.page_end,
+        }
+        for doc in docs
+    ]
+
 
 # -- Dense path ---------------------------------------------------------------
 

@@ -211,7 +211,7 @@ async def run_queries_via_api(
                             answer_tokens.append(event.get("content", ""))
                         elif event_type == "done":
                             sources = event.get("sources", [])
-                            contexts = [f"Source: {s.get('filename')} (chunk {s.get('chunk_index')})" for s in sources]
+                            contexts = [f"Source: {s.get('filename')} (page {s.get('page')})" for s in sources]
                     except json.JSONDecodeError:
                         pass
 

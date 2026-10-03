@@ -41,7 +41,7 @@ from app.core.cache import (
 from app.core.logging import get_logger
 from app.services.llm import generate_rag_stream, rewrite_query_and_hyde
 from app.services.reranker import rerank
-from app.services.retriever import Document, expand_to_parents, hybrid_search
+from app.services.retriever import Document, expand_to_parents, hybrid_search, to_sources
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -195,15 +195,7 @@ async def _stream_pipeline(
         await append_turn(redis, session_id, "assistant", full_answer)
 
         if req.use_cache:
-            sources = [
-                {
-                    "doc_id": doc.doc_id,
-                    "filename": doc.filename,
-                    "chunk_index": doc.chunk_index,
-                    "score": round(doc.score, 4),
-                }
-                for doc in top_docs
-            ]
+            sources = to_sources(top_docs)
             await set_cached_response(
                 session_id=session_id,
                 corpus_version=corpus_version,

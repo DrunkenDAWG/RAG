@@ -1,15 +1,29 @@
 // src/components/Chat/CitationPopover.tsx
 // Renders a numbered badge that opens a popover with source metadata.
 import { useState, useRef, useEffect } from "react";
-import { BookOpen, X } from "lucide-react";
+import { BookOpen, FileSearch, X } from "lucide-react";
+import { formatPages } from "../../lib/utils";
 import type { Citation, Source } from "../../types";
 
 interface BadgeProps {
   citation: Citation;
   onCitationClick?: (source: Source) => void;
+  onPreviewPage?: (source: Source) => void;
 }
 
-export function CitationBadge({ citation, onCitationClick }: BadgeProps) {
+export function PreviewPageButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-subtle hover:bg-canvas border border-border-subtle hover:border-border-strong text-text-primary text-[10px] font-mono transition-all cursor-pointer active:scale-95"
+    >
+      <FileSearch size={10} className="text-text-muted" />
+      Preview Page
+    </button>
+  );
+}
+
+export function CitationBadge({ citation, onCitationClick, onPreviewPage }: BadgeProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
 
@@ -56,16 +70,22 @@ export function CitationBadge({ citation, onCitationClick }: BadgeProps) {
             </button>
           </div>
 
-          {/* Metadata */}
-          <div className="flex items-center gap-3 text-text-muted font-mono text-[11px] border-b border-border-subtle pb-2 mb-2">
-            <span>Chunk: <strong className="text-text-secondary font-normal">{citation.source.chunk_index}</strong></span>
-            <span>Score: <strong className="text-text-secondary font-normal">{citation.source.score.toFixed(3)}</strong></span>
-          </div>
-
-          {/* Doc ID */}
-          <p className="text-text-muted truncate font-mono text-[10px]">
-            ID: {citation.source.doc_id}
-          </p>
+          {/* Page + preview */}
+          {citation.source.page ? (
+            <div className="flex items-center justify-between gap-2 text-text-muted font-mono text-[11px]">
+              <span>{formatPages(citation.source)}</span>
+              {onPreviewPage && (
+                <PreviewPageButton
+                  onClick={() => {
+                    setOpen(false);
+                    onPreviewPage(citation.source);
+                  }}
+                />
+              )}
+            </div>
+          ) : (
+            <p className="text-text-muted font-mono text-[11px]">Page preview not available</p>
+          )}
         </div>
       )}
     </span>

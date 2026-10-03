@@ -5,16 +5,21 @@ Document management endpoints:
   POST   /documents/upload   – ingest one or more files
   GET    /documents           – list all ingested documents
   DELETE /documents/{doc_id} – remove a document and its chunks
+  GET    /documents/{doc_id}/file – stream the original PDF (session-scoped)
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import AuthDep
 from app.core.logging import get_logger
+from app.services.file_store import delete_pdf, get_pdf_path, save_pdf
 from app.services.ingestion import (
     delete_document,
     get_session_collection,
@@ -86,6 +91,10 @@ async def upload_documents(
                 detail=f"Failed to ingest '{upload.filename}': {exc}",
             )
 
+        # Keep the original PDF so citations can preview the cited page
+        if Path(upload.filename or "").suffix.lower() == ".pdf":
+            await run_in_threadpool(save_pdf, active_session_id, summary["doc_id"], data)
+
         results.append(
             IngestResult(
                 filename=upload.filename or "unknown",
@@ -145,5 +154,40 @@ async def remove_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document '{document_id}' not found.",
         )
+    delete_pdf(active_session_id, document_id)
     return DeleteResult(document_id=document_id, chunks_removed=removed)
+
+
+@router.get(
+    "/{document_id}/file",
+    response_class=FileResponse,
+    summary="Stream an uploaded PDF belonging to the caller's session",
+)
+async def get_document_file(
+    _: AuthDep,
+    document_id: str,
+    x_session_id: Annotated[str, Header(alias="X-Session-Id")],
+) -> FileResponse:
+    # Ownership: the doc must be indexed in this session's own collection,
+    # and the file is resolved under this session's own storage directory.
+    collection = get_session_collection(x_session_id)
+    owned = collection.get(where={"doc_id": document_id}, limit=1, include=["metadatas"])
+    path = get_pdf_path(x_session_id, document_id) if owned["ids"] else None
+    if path is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document file not found.",
+        )
+
+    filename = (owned["metadatas"] or [{}])[0].get("filename") or "document.pdf"
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        content_disposition_type="inline",
+        filename=filename,
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
