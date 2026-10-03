@@ -18,8 +18,9 @@ from app.services.retriever import Document
 
 logger = get_logger(__name__)
 
-GEMINI_MODEL: str = "gemini-flash-latest"
-GEMINI_API_URL: str = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+# Primary model first, then fallbacks with separate per-model quotas
+GEMINI_MODELS: tuple = ("gemini-flash-latest", "gemini-flash-lite-latest")
+GEMINI_API_URL: str = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
 # ── Pydantic Schemas ──────────────────────────────────────────────────────────
@@ -83,8 +84,6 @@ async def _call_gemini_json(prompt: str, system_instruction: str) -> dict:
     if not api_key:
         raise ValueError("GEMINI_API_KEY is not configured in backend/.env")
 
-    url = f"{GEMINI_API_URL}?key={api_key}"
-
     payload = {
         "contents": [
             {
@@ -98,15 +97,33 @@ async def _call_gemini_json(prompt: str, system_instruction: str) -> dict:
         },
     }
 
+    # Try each model in turn; quota (429) / overload (5xx) on one model often
+    # leaves the others available since Gemini quotas are per-model.
+    response = None
     async with httpx.AsyncClient(timeout=45.0) as client:
-        response = await client.post(url, json=payload)
+        for model in GEMINI_MODELS:
+            response = await client.post(
+                GEMINI_API_URL.format(model=model),
+                json=payload,
+                headers={"x-goog-api-key": api_key},
+            )
+            if response.status_code == 200:
+                break
+            logger.warning(
+                "gemini.api_error",
+                model=model,
+                status_code=response.status_code,
+                body=response.text[:300],
+            )
+            if response.status_code != 429 and response.status_code < 500:
+                break
 
     if response.status_code != 200:
-        logger.error(
-            "gemini.api_error",
-            status_code=response.status_code,
-            body=response.text[:300],
-        )
+        if response.status_code == 429:
+            raise RuntimeError(
+                "Gemini quota exhausted for all models. Wait a minute (per-minute "
+                "limit) or until the daily quota resets, or use a key with billing."
+            )
         raise RuntimeError(
             f"Gemini API returned HTTP {response.status_code}: {response.text[:200]}"
         )
