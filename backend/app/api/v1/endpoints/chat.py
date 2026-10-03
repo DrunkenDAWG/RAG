@@ -39,9 +39,9 @@ from app.core.cache import (
     set_cached_response,
 )
 from app.core.logging import get_logger
-from app.services.llm import generate_rag_stream, rewrite_query
+from app.services.llm import generate_rag_stream, rewrite_query_and_hyde
 from app.services.reranker import rerank
-from app.services.retriever import Document, hybrid_search
+from app.services.retriever import Document, expand_to_parents, hybrid_search
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -106,16 +106,16 @@ async def _stream_pipeline(
     # ── Step 2: load session history ──────────────────────────────────────────
     history = await get_session_history(redis, session_id)
 
-    # ── Step 3: contextual query rewriting ────────────────────────────────────
-    rewritten = await rewrite_query(
+    # ── Step 3: merged query rewrite + HyDE (single LLM call) ────────────────
+    search_query, hyde_passage = await rewrite_query_and_hyde(
         chat_history=history,
         latest_query=req.query,
     )
-    yield _sse({"type": "rewritten_query", "content": rewritten})
+    yield _sse({"type": "rewritten_query", "content": search_query})
 
     # Second cache check with rewritten query (catches paraphrases)
-    if req.use_cache and rewritten != req.query:
-        cached = await get_cached_response(session_id, corpus_version, rewritten)
+    if req.use_cache and search_query != req.query:
+        cached = await get_cached_response(session_id, corpus_version, search_query)
         if cached:
             logger.info(
                 "chat.cache_hit_rewritten",
@@ -131,11 +131,12 @@ async def _stream_pipeline(
             )
             return
 
-    # ── Step 4: hybrid search ─────────────────────────────────────────────────
+    # ── Step 4: hybrid search (BM25 on search_query, dense on hyde_passage) ───
     candidates: List[Document] = await hybrid_search(
-        query=rewritten,
         session_id=session_id,
         top_k=req.top_k,
+        search_query=search_query,
+        hyde_passage=hyde_passage,
     )
     if not candidates:
         yield _sse(
@@ -149,18 +150,19 @@ async def _stream_pipeline(
         )
         return
 
-    # ── Step 5: cross-encoder rerank (non-blocking) ──────────────────────────
-    # rerank() is async and dispatches the CPU-bound CrossEncoder.predict()
-    # call via run_in_threadpool internally — no double-wrapping needed.
-    top_docs: List[Document] = await rerank(
-        query=rewritten, docs=candidates, top_n=req.top_n
+    # ── Step 5: cross-encoder rerank on child chunks (within 512-token limit) ─
+    top_children: List[Document] = await rerank(
+        query=search_query, docs=candidates, top_n=req.top_n
     )
+
+    # ── Step 5b: parent expansion — swap children for full 800-token parents ──
+    top_docs: List[Document] = await expand_to_parents(top_children)
 
     # ── Step 6: stream LLM generation ────────────────────────────────────────
     full_answer_parts: List[str] = []
 
     async for sse_line in generate_rag_stream(
-        query=rewritten,
+        query=search_query,
         context_docs=top_docs,
         model=req.model,
         temperature=req.temperature,
@@ -194,7 +196,7 @@ async def _stream_pipeline(
             await set_cached_response(
                 session_id=session_id,
                 corpus_version=corpus_version,
-                rewritten_query=rewritten,
+                rewritten_query=search_query,
                 answer=full_answer,
                 sources=sources,
             )

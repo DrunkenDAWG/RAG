@@ -9,7 +9,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /build
 
 COPY requirements.txt .
-RUN pip install --prefix=/install -r requirements.txt
+RUN pip install --no-cache-dir --default-timeout=1000 --prefix=/install torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir --default-timeout=1000 --prefix=/install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────

@@ -1,33 +1,28 @@
 """
 app/services/llm.py
-────────────────────
-Phase 3 — Contextual query rewriting + grounded streaming generation.
+--------------------
+Phase 3 — Merged HyDE + Query Rewrite + grounded streaming generation.
 
-Two public coroutines:
+Public API:
+  rewrite_query_and_hyde(chat_history, latest_query) -> (search_query, hyde_passage)
+    Single LLM call returning structured JSON:
+      {"search_query": "...", "hyde_passage": "..."}
+    search_query  — disambiguated, standalone keyword query for BM25.
+    hyde_passage  — hypothetical answer passage for dense (BGE) embedding.
+    Falls back to (latest_query, latest_query) on any error.
 
-  rewrite_query(chat_history, latest_query) -> str
-    Sends a condensation prompt to a fast model (llama-3.1-8b-instant) and
-    returns a self-contained, context-free search query. Falls back to the
-    raw query on any error so the pipeline never stalls.
-
-  generate_rag_stream(query, context_docs) -> AsyncIterator[str]
-    Yields raw SSE-formatted lines (each ending with \\n\\n).
-    Uses tenacity to retry on Groq 429 / 503 with exponential back-off.
-    The system prompt strictly grounds the model to the provided context.
+  generate_rag_stream(query, context_docs, ...) -> AsyncIterator[str]
+    Streams SSE-formatted grounded answer tokens.
 
 Design notes:
-  • A single AsyncGroq client is constructed per call — Groq's SDK manages
-    connection pooling internally, so this is safe and avoids shared state.
-  • Retry is only applied to the non-streaming rewrite call; streaming
-    connections should not be retried mid-stream (data would be duplicated).
-    Instead, the stream call retries the *initial* create() invocation only.
-  • Both models are configurable via settings.model_names; the fast model
-    is hard-coded to the first element with "8b" in the name or fallback.
+  - A single AsyncGroq client per call; SDK manages connection pooling.
+  - Retry applied to the non-streaming rewrite call only.
+  - Streaming retries the *initial* create() invocation, not mid-stream tokens.
 """
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator, List, Optional
+from typing import AsyncIterator, List, Optional, Tuple
 
 from groq import AsyncGroq, APIStatusError, RateLimitError
 from tenacity import (
@@ -43,39 +38,39 @@ from app.services.retriever import Document
 
 logger = get_logger(__name__)
 
-# ── Model constants ───────────────────────────────────────────────────────────
-_FAST_MODEL: str = "llama-3.1-8b-instant"     # query rewriting — cheap & fast
-_STRONG_MODEL: str = "llama-3.3-70b-versatile" # RAG generation — high quality
+# -- Model constants ----------------------------------------------------------
+_FAST_MODEL: str = "qwen/qwen3.8-27b"    # query rewrite + HyDE
+_STRONG_MODEL: str = "qwen/qwen3.8-27b"  # RAG generation
 
-# ── System prompts ────────────────────────────────────────────────────────────
+# -- System prompts -----------------------------------------------------------
 
-_REWRITE_SYSTEM_PROMPT: str = """\
-You are a search-query optimiser. Your sole job is to rewrite the user's \
-latest message into a single, standalone, self-contained search query that \
-can be understood without any prior conversation context.
+_REWRITE_HYDE_SYSTEM_PROMPT: str = (
+    "You are a dual-purpose search assistant. Given the conversation history "
+    "and the user's latest message, return a single JSON object with exactly "
+    "two keys:\n"
+    '  "search_query"  — a concise, standalone keyword query optimised for '
+    "BM25 lexical search. Resolve pronouns and elliptical references. "
+    "Preserve domain-specific terminology exactly.\n"
+    '  "hyde_passage"  — a short hypothetical document passage (2-4 sentences) '
+    "that directly answers the question, as if it were extracted from a relevant "
+    "document. This is used for dense semantic embedding, so write it in the "
+    "style of a factual document excerpt.\n"
+    "Output ONLY valid JSON — no markdown fences, no preamble, no explanation."
+)
 
-Rules:
-- Output ONLY the rewritten query — no preamble, no explanation, no quotes.
-- Resolve pronouns and elliptical references using the chat history.
-- Preserve domain-specific terminology exactly.
-- If the latest message is already self-contained, return it unchanged.
-"""
+_RAG_SYSTEM_PROMPT: str = (
+    "You are a precise, citation-driven AI assistant.\n\n"
+    "Answer the user's question EXCLUSIVELY from the numbered context passages "
+    "provided below. Do not use any external knowledge.\n\n"
+    "Strict rules:\n"
+    "1. Cite every claim with [N] referencing the passage number.\n"
+    '2. If the answer is not present in the context, respond with exactly: '
+    '"I cannot answer this from the provided documents."\n'
+    "3. Do not speculate, extrapolate, or hallucinate.\n"
+    "4. Be concise — prefer bullet points for multi-part answers."
+)
 
-_RAG_SYSTEM_PROMPT: str = """\
-You are a precise, citation-driven AI assistant.
-
-Answer the user's question EXCLUSIVELY from the numbered context passages \
-provided below. Do not use any external knowledge.
-
-Strict rules:
-1. Cite every claim with [N] referencing the passage number.
-2. If the answer is not present in the context, respond with exactly:
-   "I cannot answer this from the provided documents."
-3. Do not speculate, extrapolate, or hallucinate.
-4. Be concise — prefer bullet points for multi-part answers.
-"""
-
-# ── Groq client ───────────────────────────────────────────────────────────────
+# -- Groq client --------------------------------------------------------------
 
 def _client() -> AsyncGroq:
     return AsyncGroq(api_key=get_settings().groq_api_key)
@@ -92,7 +87,7 @@ def _resolve_model(model: Optional[str]) -> str:
     return model
 
 
-# ── Retry decorator ───────────────────────────────────────────────────────────
+# -- Retry policy -------------------------------------------------------------
 
 def _retry_policy() -> AsyncRetrying:
     """Retry on Groq 429 (rate-limit) and 503 (overloaded) with back-off."""
@@ -104,7 +99,7 @@ def _retry_policy() -> AsyncRetrying:
     )
 
 
-# ── Prompt builders ───────────────────────────────────────────────────────────
+# -- Prompt builders ----------------------------------------------------------
 
 def _build_context_block(docs: List[Document]) -> str:
     blocks = []
@@ -121,42 +116,34 @@ def _build_rag_user_message(query: str, docs: List[Document]) -> str:
     return f"Context passages:\n\n{context}\n\n---\n\nQuestion: {query}"
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# -- Public API ---------------------------------------------------------------
 
-async def rewrite_query(
+async def rewrite_query_and_hyde(
     chat_history: List[dict],
     latest_query: str,
-) -> str:
+) -> Tuple[str, str]:
     """
-    Disambiguate a potentially anaphoric follow-up question into a
-    standalone search query using chat history as context.
-
-    Uses llama-3.1-8b-instant for speed (rewriting is latency-sensitive).
-    Falls back to *latest_query* on any error so the pipeline never stalls.
+    Single LLM call that returns both a BM25 keyword query and a HyDE passage.
 
     Args:
-        chat_history:  Recent turns as [{"role": "user"|"assistant", "content": str}].
-                       Capped internally to the last 6 turns (3 exchanges).
-        latest_query:  The user's most recent raw message.
+        chat_history:  Recent turns [{role, content}], capped to last 6.
+        latest_query:  The user's raw message.
 
     Returns:
-        A standalone, context-free search query string.
+        (search_query, hyde_passage)
+        Falls back to (latest_query, latest_query) on any error.
     """
-    # If no history exists there is nothing to disambiguate
-    if not chat_history:
-        return latest_query
-
-    # Cap history to last 6 messages (3 user/assistant pairs) to stay within
-    # context budget of the fast model
-    recent_history = chat_history[-6:]
+    recent_history = chat_history[-6:] if chat_history else []
 
     messages: List[dict] = [
-        {"role": "system", "content": _REWRITE_SYSTEM_PROMPT},
+        {"role": "system", "content": _REWRITE_HYDE_SYSTEM_PROMPT},
         *recent_history,
         {
             "role": "user",
             "content": (
-                f"Latest message to rewrite into a standalone query:\n{latest_query}"
+                f"Conversation context above.\n"
+                f"Latest user message: {latest_query}\n\n"
+                f"Return JSON with search_query and hyde_passage."
             ),
         },
     ]
@@ -167,24 +154,42 @@ async def rewrite_query(
                 response = await _client().chat.completions.create(
                     model=_FAST_MODEL,
                     messages=messages,
-                    temperature=0.0,   # deterministic rewriting
-                    max_tokens=256,
+                    temperature=0.0,
+                    max_tokens=512,
                 )
-        rewritten = (response.choices[0].message.content or latest_query).strip()
+        raw = (response.choices[0].message.content or "{}").strip()
+        # Strip optional markdown code fences if model adds them
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = json.loads(raw)
+        search_query = parsed.get("search_query", latest_query).strip() or latest_query
+        hyde_passage = parsed.get("hyde_passage", latest_query).strip() or latest_query
         logger.info(
-            "llm.query_rewritten",
+            "llm.rewrite_hyde_done",
             original=latest_query[:80],
-            rewritten=rewritten[:80],
+            search_query=search_query[:80],
+            hyde_preview=hyde_passage[:80],
         )
-        return rewritten
+        return search_query, hyde_passage
     except Exception as exc:
-        # Non-fatal: fall back gracefully so retrieval is never blocked
         logger.warning(
-            "llm.rewrite_failed",
+            "llm.rewrite_hyde_failed",
             error=str(exc),
             fallback=latest_query[:80],
         )
-        return latest_query
+        return latest_query, latest_query
+
+
+# Backward-compatible alias used by chat.py (single return value)
+async def rewrite_query(
+    chat_history: List[dict],
+    latest_query: str,
+) -> str:
+    """Legacy alias — returns only the search_query string."""
+    search_query, _ = await rewrite_query_and_hyde(chat_history, latest_query)
+    return search_query
 
 
 async def generate_rag_stream(
@@ -198,24 +203,12 @@ async def generate_rag_stream(
     Stream a strictly-grounded RAG answer as SSE-formatted lines.
 
     Each yielded string is a complete SSE line ready to be written to the
-    response body. The caller should NOT add additional framing.
+    response body. Tenacity retries the stream *creation* only.
 
     SSE line formats:
-        data: {"type": "token", "content": "<delta>"}\\n\\n
-        data: {"type": "done",  "sources": [...]}\\n\\n
-        data: {"type": "error", "detail": "<message>"}\\n\\n
-
-    Tenacity retries the *stream creation* (not mid-stream) on 429 / 503.
-
-    Args:
-        query:        The (rewritten) search query / user question.
-        context_docs: Reranked Document list from the retrieval pipeline.
-        model:        Optional model override (validated against allowlist).
-        temperature:  Sampling temperature.
-        max_tokens:   Maximum completion tokens.
-
-    Yields:
-        SSE-formatted strings ending with \\n\\n.
+        data: {"type": "token", "content": "<delta>"}\n\n
+        data: {"type": "done",  "sources": [...]}\n\n
+        data: {"type": "error", "detail": "<message>"}\n\n
     """
     resolved_model = _resolve_model(model)
     user_message = _build_rag_user_message(query, context_docs)
@@ -225,14 +218,9 @@ async def generate_rag_stream(
         {"role": "user", "content": user_message},
     ]
 
-    logger.info(
-        "llm.stream_start",
-        model=resolved_model,
-        doc_count=len(context_docs),
-        query_preview=query[:60],
-    )
+    logger.info("llm.stream_start", model=resolved_model,
+                doc_count=len(context_docs), query_preview=query[:60])
 
-    # ── Retry only the stream *creation* — not mid-stream tokens ─────────────
     stream = None
     try:
         async for attempt in _retry_policy():
@@ -249,7 +237,6 @@ async def generate_rag_stream(
         yield _sse({"type": "error", "detail": f"LLM unavailable: {exc}"})
         return
 
-    # ── Stream tokens ─────────────────────────────────────────────────────────
     try:
         async for chunk in stream:
             delta = chunk.choices[0].delta.content
@@ -260,7 +247,6 @@ async def generate_rag_stream(
         yield _sse({"type": "error", "detail": "Stream interrupted."})
         return
 
-    # ── Done event with source citations ──────────────────────────────────────
     sources = [
         {
             "doc_id": doc.doc_id,
@@ -274,7 +260,7 @@ async def generate_rag_stream(
     logger.info("llm.stream_complete", model=resolved_model, source_count=len(sources))
 
 
-# ── SSE serialiser ────────────────────────────────────────────────────────────
+# -- SSE serialiser -----------------------------------------------------------
 
 def _sse(payload: dict) -> str:
     """Serialise a dict to a well-formed SSE data line."""
