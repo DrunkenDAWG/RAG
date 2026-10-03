@@ -26,7 +26,7 @@ export function DocumentUpload({ uploads, disabled, onUpload }: Props) {
         ref={inputRef}
         type="file"
         multiple
-        accept=".pdf,.docx,.txt"
+        accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.webp"
         className="hidden"
         onChange={(e) => handleFiles(e.target.files)}
       />
@@ -52,7 +52,7 @@ export function DocumentUpload({ uploads, disabled, onUpload }: Props) {
         ) : (
           <Upload size={14} />
         )}
-        <span>{isUploading ? "Uploading…" : "Upload Files (.pdf, .docx, .txt)"}</span>
+        <span>{isUploading ? "Uploading…" : "Upload Files (.pdf, .docx, .txt, images)"}</span>
       </button>
 
       {/* Per-file progress rows */}

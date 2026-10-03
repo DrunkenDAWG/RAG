@@ -62,7 +62,7 @@ class DeleteResult(BaseModel):
 )
 async def upload_documents(
     _: AuthDep,
-    files: List[UploadFile] = File(..., description="PDF, DOCX, or plain-text files"),
+    files: List[UploadFile] = File(..., description="PDF, DOCX, plain-text, or image (PNG/JPG/WEBP) files"),
     x_session_id: Annotated[Optional[str], Header(alias="X-Session-Id")] = None,
     session_id: Optional[str] = Form(None),
 ) -> List[IngestResult]:

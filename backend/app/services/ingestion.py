@@ -12,6 +12,9 @@ Design:
   - Full Parent texts stored in Redis as parent:{pid} â€” never in ChromaDB
     metadata to avoid HNSW payload bloat.
   - BM25 built from Child texts for keyword-level granularity.
+  - Images embedded in PDFs (figures, diagrams, scans) and standalone image
+    uploads are converted to text via app.services.vision (Gemini) before
+    chunking; PDF figure text is appended to its own page.
   - AutoTokenizer from BAAI/bge-small-en-v1.5 for accurate token counting,
     consistent with the embedding model vocabulary.
   - Metadata per Child in ChromaDB:
@@ -48,6 +51,12 @@ from transformers import AutoTokenizer  # type: ignore[import-untyped]
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.services.vision import (
+    describe_image,
+    describe_images,
+    prepare_image,
+    vision_available,
+)
 
 logger = get_logger(__name__)
 
@@ -158,25 +167,115 @@ def embed_query_sync(text: str) -> List[List[float]]:
 
 # -- Text extraction ----------------------------------------------------------
 
-def _extract_text_pdf(data: bytes) -> Tuple[str, Optional[List[int]]]:
+IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+
+# (0-based page index, prepared JPEG bytes)
+PdfImage = Tuple[int, bytes]
+
+
+def _collect_pdf_images(reader) -> List[PdfImage]:
     """
-    Returns (text, page_starts) where page_starts[i] is the char offset in
-    text at which page i+1 begins. page_starts is None if parsing failed.
+    Pull embedded raster images (figures, diagrams, scanned pages) from a PDF,
+    skipping tiny/undecodable ones and repeats (e.g. a logo on every page).
+    Capped at settings.vision_max_images_per_doc.
     """
+    limit = get_settings().vision_max_images_per_doc
+    seen: set = set()
+    images: List[PdfImage] = []
+    for p_idx, page in enumerate(reader.pages):
+        try:
+            page_images = list(page.images)
+        except Exception as exc:
+            logger.debug("ingestion.pdf_page_images_failed", page=p_idx + 1, error=str(exc))
+            continue
+        for img in page_images:
+            if len(images) >= limit:
+                logger.info("ingestion.pdf_image_limit_reached", limit=limit)
+                return images
+            try:
+                raw = img.data
+            except Exception:
+                continue
+            digest = hashlib.sha1(raw).hexdigest()
+            if digest in seen:
+                continue
+            seen.add(digest)
+            prepared = prepare_image(raw)
+            if prepared is not None:
+                images.append((p_idx, prepared))
+    return images
+
+
+def _read_pdf_sync(
+    data: bytes,
+    collect_images: bool,
+) -> Tuple[Optional[List[str]], List[PdfImage]]:
+    """Returns (page_texts, images); page_texts is None if parsing failed."""
     try:
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(data))
         page_texts = [page.extract_text() or "" for page in reader.pages]
     except Exception as exc:
         logger.warning("ingestion.pdf_extraction_failed", error=str(exc))
-        return data.decode("utf-8", errors="replace"), None
+        return None, []
+    images = _collect_pdf_images(reader) if collect_images else []
+    return page_texts, images
 
+
+def _join_pages(page_texts: List[str]) -> Tuple[str, List[int]]:
+    """
+    Returns (text, page_starts) where page_starts[i] is the char offset in
+    text at which page i+1 begins.
+    """
     page_starts: List[int] = []
     offset = 0
     for page_text in page_texts:
         page_starts.append(offset)
         offset += len(page_text) + 1  # +1 for the "\n" joiner
     return "\n".join(page_texts), page_starts
+
+
+def _extract_text_pdf(data: bytes) -> Tuple[str, Optional[List[int]]]:
+    """Text layer only. page_starts is None if parsing failed."""
+    page_texts, _ = _read_pdf_sync(data, collect_images=False)
+    if page_texts is None:
+        return data.decode("utf-8", errors="replace"), None
+    return _join_pages(page_texts)
+
+
+async def _extract_pdf_with_figures(data: bytes) -> Tuple[str, Optional[List[int]]]:
+    """
+    PDF text layer plus vision-generated text for embedded images. Each
+    figure's text is appended to its own page, so page citations still point
+    at the page the figure is on.
+    """
+    page_texts, images = await run_in_threadpool(
+        _read_pdf_sync, data, vision_available()
+    )
+    if page_texts is None:
+        return data.decode("utf-8", errors="replace"), None
+
+    if images:
+        descriptions = await describe_images([jpeg for _, jpeg in images])
+        for (p_idx, _), desc in zip(images, descriptions):
+            if desc:
+                # One paragraph per figure so the chunker keeps it together
+                desc = re.sub(r"\n\s*\n+", "\n", desc.strip())
+                page_texts[p_idx] += f"\n\n[Figure on page {p_idx + 1}]\n{desc}"
+    return _join_pages(page_texts)
+
+
+async def _extract_image_text(data: bytes) -> str:
+    """Standalone image upload → text via the vision model."""
+    if not vision_available():
+        raise ValueError("Image uploads need GEMINI_API_KEY set (vision is unavailable).")
+    jpeg = await run_in_threadpool(prepare_image, data)
+    if jpeg is None:
+        raise ValueError("Unsupported, corrupt, or too-small image.")
+    text = await describe_image(jpeg)
+    if not text:
+        raise ValueError("Could not extract any text or diagram content from the image.")
+    return text
 
 
 def _extract_text_docx(data: bytes) -> str:
@@ -464,8 +563,15 @@ async def ingest_document(
                 "corpus_version": _session_versions.get(session_id, 0),
                 "status": "already_exists"}
 
-    # CPU-bound work offloaded to threadpool
-    text, page_starts = await run_in_threadpool(_extract_text_sync, filename, data)
+    # CPU-bound work offloaded to threadpool; images/figures → text via vision
+    ext = Path(filename).suffix.lower()
+    page_starts: Optional[List[int]] = None
+    if ext == ".pdf":
+        text, page_starts = await _extract_pdf_with_figures(data)
+    elif ext in IMAGE_EXTENSIONS:
+        text = await _extract_image_text(data)
+    else:
+        text, page_starts = await run_in_threadpool(_extract_text_sync, filename, data)
     parent_ids, parent_texts, child_ids, child_texts, child_pages = await run_in_threadpool(
         _build_parent_child_chunks, text, doc_id, page_starts
     )

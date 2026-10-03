@@ -1,6 +1,6 @@
 // src/components/Chat/ChatWindow.tsx
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, MessageSquareDashed, GraduationCap } from "lucide-react";
+import { MessageSquareDashed } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
 import { PdfPreviewModal } from "./PdfPreviewModal";
@@ -27,36 +27,6 @@ export function ChatWindow({ activeSession, onCitationClick }: Props) {
 
   return (
     <div className="flex flex-col h-full bg-canvas">
-      {/* Header */}
-      <div className="flex items-center gap-3 px-6 py-3.5 border-b border-border-subtle bg-surface/80 backdrop-blur-md">
-        <div className="flex items-center justify-center w-7 h-7 rounded-md bg-subtle border border-border-subtle text-text-secondary">
-          <Bot size={15} />
-        </div>
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-xs font-semibold text-text-primary tracking-tight">
-              {activeSession ? activeSession.label : "Chat"}
-            </h2>
-            {tutorMode && (
-              <span className="flex items-center gap-1 text-[10px] font-mono font-medium px-2 py-0.5 rounded bg-subtle text-text-secondary border border-border-subtle">
-                <GraduationCap size={11} /> Socratic Mode
-              </span>
-            )}
-          </div>
-          <p className="text-[11px] font-mono text-text-muted">
-            {activeSession
-              ? `${activeSession.session_id.slice(0, 8)}…`
-              : "No active session"}
-          </p>
-        </div>
-        {isStreaming && (
-          <div className="ml-auto flex items-center gap-2 text-xs font-mono text-text-muted">
-            <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
-            <span>Streaming</span>
-          </div>
-        )}
-      </div>
-
       {/* Messages */}
       <div className="flex-1 overflow-y-auto py-6 space-y-4 scroll-smooth">
         {messages.length === 0 ? (

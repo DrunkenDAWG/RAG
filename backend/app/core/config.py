@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # ── Uploaded originals (PDF page preview) ─────────────────────────────────
     upload_dir: str = Field(default="./data/uploads")
 
+    # ── Vision (image / diagram → text via Gemini) ───────────────────────────
+    vision_enabled: bool = Field(default=True)
+    vision_max_images_per_doc: int = Field(default=40, ge=0, le=500)
+    vision_min_image_px: int = Field(default=100, ge=1)
+
     # ── Embeddings ────────────────────────────────────────────────────────────
     embedding_model_name: str = Field(default="all-MiniLM-L6-v2")
 
