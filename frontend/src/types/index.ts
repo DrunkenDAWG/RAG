@@ -46,3 +46,25 @@ export type SSEEvent =
   | { type: "done";            sources: Source[] }
   | { type: "error";           detail: string }
   | { type: "cached";          answer: string; sources: Source[] };
+
+export interface QuizQuestion {
+  question: string;
+  options: string[];
+  correct_answer: string;
+  explanation: string;
+}
+
+export interface Quiz {
+  questions: QuizQuestion[];
+}
+
+export interface Flashcard {
+  front: string;
+  back: string;
+  key_term: string;
+}
+
+export interface FlashcardDeck {
+  cards: Flashcard[];
+}
+

@@ -86,6 +86,17 @@ def create_app() -> FastAPI:
     # ── Routes ────────────────────────────────────────────────────────────────
     app.include_router(api_router)
 
+    # ── Root endpoint ─────────────────────────────────────────────────────────
+    @app.get("/", tags=["root"], summary="API root")
+    async def root() -> dict:
+        return {
+            "name": "Student Study Hub API",
+            "status": "running",
+            "frontend_ui": "http://localhost:5173",
+            "docs": "/docs",
+            "health": "/health",
+        }
+
     # ── Health check ──────────────────────────────────────────────────────────
     @app.get("/health", tags=["ops"], summary="Liveness probe")
     async def health() -> dict:

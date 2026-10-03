@@ -2,13 +2,14 @@
 // Renders a numbered badge that opens a popover with source metadata.
 import { useState, useRef, useEffect } from "react";
 import { BookOpen, X } from "lucide-react";
-import type { Citation } from "../../types";
+import type { Citation, Source } from "../../types";
 
 interface BadgeProps {
   citation: Citation;
+  onCitationClick?: (source: Source) => void;
 }
 
-export function CitationBadge({ citation }: BadgeProps) {
+export function CitationBadge({ citation, onCitationClick }: BadgeProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
 
@@ -22,14 +23,21 @@ export function CitationBadge({ citation }: BadgeProps) {
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setOpen((o) => !o);
+    onCitationClick?.(citation.source);
+  };
+
   return (
-    <span ref={ref} className="relative inline-block align-middle mx-0.5">
+    <span ref={ref} className="relative inline-block align-middle mx-1 my-0.5">
       <button
-        onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold leading-none transition-colors"
-        title={`Source: ${citation.source.filename}`}
+        onClick={handleClick}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-900/60 hover:bg-indigo-600 border border-indigo-400/50 hover:border-indigo-300 text-indigo-300 hover:text-white text-[11px] font-semibold tracking-wide transition-all shadow-sm hover:scale-105 active:scale-95 cursor-pointer"
+        title={`Click to highlight in Knowledge Base: ${citation.source.filename}`}
       >
-        {citation.index}
+        <BookOpen size={10} className="text-indigo-400 group-hover:text-white" />
+        <span>Doc {citation.index}</span>
       </button>
 
       {open && (

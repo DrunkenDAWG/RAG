@@ -7,9 +7,9 @@ let msgCounter = 0;
 const uid = () => `msg_${++msgCounter}_${Date.now()}`;
 
 function parseCitations(text: string, sources: Source[]): Citation[] {
-  // Match patterns like [1], [2], [1,2], [1, 2]
+  // Match patterns like [1], [2], [1,2], [Doc 1], [doc 2]
   const refs = new Set<number>();
-  const pattern = /\[(\d+(?:,\s*\d+)*)\]/g;
+  const pattern = /\[(?:(?:Doc|doc)\s*)?(\d+(?:,\s*\d+)*)\]/g;
   let m: RegExpExecArray | null;
   while ((m = pattern.exec(text)) !== null) {
     m[1].split(",").forEach((n) => refs.add(parseInt(n.trim(), 10)));
@@ -25,7 +25,7 @@ export function useChat(sessionId: string | null) {
   const abortRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(
-    async (query: string) => {
+    async (query: string, tutorMode: boolean = false) => {
       if (!sessionId || isStreaming) return;
 
       // Cancel any in-flight request
@@ -68,6 +68,7 @@ export function useChat(sessionId: string | null) {
         await streamChat({
           sessionId,
           query,
+          tutorMode,
           signal: controller.signal,
 
           onRewrittenQuery: (q) => patch(() => ({ rewrittenQuery: q })),

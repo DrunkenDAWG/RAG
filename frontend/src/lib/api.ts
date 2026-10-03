@@ -2,7 +2,7 @@
 // ───────────────
 // Typed API client for all backend interactions.
 
-import type { Document, Session, Source, SSEEvent } from "../types";
+import type { Document, FlashcardDeck, Quiz, Session, Source, SSEEvent } from "../types";
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -95,6 +95,7 @@ export interface ChatStreamOptions {
   topK?: number;
   topN?: number;
   useCache?: boolean;
+  tutorMode?: boolean;
   onToken: (delta: string) => void;
   onRewrittenQuery: (q: string) => void;
   onDone: (sources: Source[]) => void;
@@ -114,6 +115,7 @@ export async function streamChat(opts: ChatStreamOptions): Promise<void> {
       top_k: opts.topK ?? 20,
       top_n: opts.topN ?? 5,
       use_cache: opts.useCache ?? true,
+      tutor_mode: opts.tutorMode ?? false,
     }),
     signal: opts.signal,
   });
@@ -156,3 +158,52 @@ export async function streamChat(opts: ChatStreamOptions): Promise<void> {
     }
   }
 }
+
+// ── Study / Active Recall ────────────────────────────────────────────────────
+
+export async function generateQuiz(
+  sessionId: string,
+  topic: string,
+): Promise<Quiz> {
+  const res = await fetch(`${BASE}/api/v1/study/generate-quiz`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      topic,
+    }),
+  });
+
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(
+      errorData.detail || `Failed to generate quiz: ${res.statusText}`,
+    );
+  }
+
+  return res.json();
+}
+
+export async function generateFlashcards(
+  sessionId: string,
+  topic: string,
+): Promise<FlashcardDeck> {
+  const res = await fetch(`${BASE}/api/v1/study/generate-flashcards`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      topic,
+    }),
+  });
+
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(
+      errorData.detail || `Failed to generate flashcards: ${res.statusText}`,
+    );
+  }
+
+  return res.json();
+}
+

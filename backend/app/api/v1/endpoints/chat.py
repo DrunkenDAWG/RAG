@@ -60,6 +60,9 @@ class ChatRequest(BaseModel):
     temperature: float = Field(0.2, ge=0.0, le=2.0)
     max_tokens: int = Field(1024, ge=64, le=8192)
     use_cache: bool = Field(True, description="Serve cached answer if available")
+    tutor_mode: bool = Field(
+        False, description="Enable Socratic tutor study companion mode"
+    )
 
 
 # ── SSE helpers ───────────────────────────────────────────────────────────────
@@ -82,17 +85,20 @@ async def _stream_pipeline(
 
     # ── Step 1: corpus version + cache check ──────────────────────────────────
     corpus_version = await get_corpus_version(session_id)
+    cache_prefix = "tutor:" if req.tutor_mode else ""
+    raw_cache_query = f"{cache_prefix}{req.query}"
 
     if req.use_cache:
         # We need the rewritten query to build the cache key, but for a cache
         # hit we want to avoid the rewrite round-trip. Attempt a cache lookup
         # with the raw query first (fast path for exact repeat questions).
-        cached = await get_cached_response(session_id, corpus_version, req.query)
+        cached = await get_cached_response(session_id, corpus_version, raw_cache_query)
         if cached:
             logger.info(
                 "chat.cache_hit",
                 session_id=session_id,
                 corpus_version=corpus_version,
+                tutor_mode=req.tutor_mode,
             )
             yield _sse(
                 {
@@ -114,13 +120,17 @@ async def _stream_pipeline(
     yield _sse({"type": "rewritten_query", "content": search_query})
 
     # Second cache check with rewritten query (catches paraphrases)
+    rewritten_cache_query = f"{cache_prefix}{search_query}"
     if req.use_cache and search_query != req.query:
-        cached = await get_cached_response(session_id, corpus_version, search_query)
+        cached = await get_cached_response(
+            session_id, corpus_version, rewritten_cache_query
+        )
         if cached:
             logger.info(
                 "chat.cache_hit_rewritten",
                 session_id=session_id,
                 corpus_version=corpus_version,
+                tutor_mode=req.tutor_mode,
             )
             yield _sse(
                 {
@@ -167,6 +177,7 @@ async def _stream_pipeline(
         model=req.model,
         temperature=req.temperature,
         max_tokens=req.max_tokens,
+        tutor_mode=req.tutor_mode,
     ):
         # Accumulate tokens for persistence; forward every SSE line verbatim
         try:
@@ -196,7 +207,7 @@ async def _stream_pipeline(
             await set_cached_response(
                 session_id=session_id,
                 corpus_version=corpus_version,
-                rewritten_query=search_query,
+                rewritten_query=rewritten_cache_query,
                 answer=full_answer,
                 sources=sources,
             )
@@ -204,6 +215,7 @@ async def _stream_pipeline(
                 "chat.response_cached",
                 session_id=session_id,
                 corpus_version=corpus_version,
+                tutor_mode=req.tutor_mode,
             )
 
 

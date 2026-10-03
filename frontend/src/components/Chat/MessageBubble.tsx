@@ -1,42 +1,78 @@
 // src/components/Chat/MessageBubble.tsx
 // Renders a single chat message with Markdown, citation badges, and streaming cursor.
+import type React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import clsx from "clsx";
 import { Bot, User, Sparkles } from "lucide-react";
 import { CitationBadge } from "./CitationPopover";
-import type { Message } from "../../types";
+import type { Message, Source } from "../../types";
 
 interface Props {
   message: Message;
+  onCitationClick?: (source: Source) => void;
 }
 
-// Inject citation badges after numeric references like [1], [1,2]
-function renderContentWithCitations(message: Message) {
+// Find marker for citation index (supports [1], [Doc 1], [doc 1], [Doc1])
+function findMarker(text: string, index: number): { marker: string; idx: number } | null {
+  const variations = [
+    `[Doc ${index}]`,
+    `[doc ${index}]`,
+    `[Doc${index}]`,
+    `[doc${index}]`,
+    `[${index}]`,
+  ];
+  for (const m of variations) {
+    const idx = text.indexOf(m);
+    if (idx !== -1) {
+      return { marker: m, idx };
+    }
+  }
+  return null;
+}
+
+// Inject citation pill buttons after references
+function renderContentWithCitations(
+  message: Message,
+  onCitationClick?: (source: Source) => void,
+) {
   const { content, citations, isStreaming } = message;
   if (citations.length === 0) {
     return (
       <div className="prose prose-invert prose-sm max-w-none">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-        {isStreaming && <span className="inline-block w-1.5 h-4 bg-indigo-400 animate-pulse ml-0.5 rounded-sm" />}
+        {isStreaming && (
+          <span className="inline-block w-1.5 h-4 bg-indigo-400 animate-pulse ml-0.5 rounded-sm" />
+        )}
       </div>
     );
   }
 
-  // Split content around citation references and inject badge components
-  const parts: (string | JSX.Element)[] = [];
+  const parts: (string | React.ReactNode)[] = [];
   let remaining = content;
   let key = 0;
 
-  const sorted = [...citations].sort((a, b) =>
-    content.indexOf(`[${a.index}]`) - content.indexOf(`[${b.index}]`),
-  );
+  // Find all citations present in remaining
+  while (remaining.length > 0) {
+    let earliestMatch: { citation: any; marker: string; idx: number } | null = null;
 
-  for (const citation of sorted) {
-    const marker = `[${citation.index}]`;
-    const idx = remaining.indexOf(marker);
-    if (idx === -1) continue;
-    const before = remaining.slice(0, idx);
+    for (const citation of citations) {
+      const match = findMarker(remaining, citation.index);
+      if (match && (earliestMatch === null || match.idx < earliestMatch.idx)) {
+        earliestMatch = { citation, marker: match.marker, idx: match.idx };
+      }
+    }
+
+    if (!earliestMatch) {
+      parts.push(
+        <span key={key++} className="prose prose-invert prose-sm max-w-none">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{remaining}</ReactMarkdown>
+        </span>,
+      );
+      break;
+    }
+
+    const before = remaining.slice(0, earliestMatch.idx);
     if (before) {
       parts.push(
         <span key={key++} className="prose prose-invert prose-sm max-w-none">
@@ -44,24 +80,31 @@ function renderContentWithCitations(message: Message) {
         </span>,
       );
     }
-    parts.push(<CitationBadge key={key++} citation={citation} />);
-    remaining = remaining.slice(idx + marker.length);
-  }
-  if (remaining) {
+
     parts.push(
-      <span key={key++} className="prose prose-invert prose-sm max-w-none">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{remaining}</ReactMarkdown>
-      </span>,
+      <CitationBadge
+        key={key++}
+        citation={earliestMatch.citation}
+        onCitationClick={onCitationClick}
+      />,
     );
+
+    remaining = remaining.slice(earliestMatch.idx + earliestMatch.marker.length);
   }
+
   if (isStreaming) {
-    parts.push(<span key={key++} className="inline-block w-1.5 h-4 bg-indigo-400 animate-pulse ml-0.5 rounded-sm" />);
+    parts.push(
+      <span
+        key={key++}
+        className="inline-block w-1.5 h-4 bg-indigo-400 animate-pulse ml-0.5 rounded-sm"
+      />,
+    );
   }
 
   return <>{parts}</>;
 }
 
-export function MessageBubble({ message }: Props) {
+export function MessageBubble({ message, onCitationClick }: Props) {
   const isUser = message.role === "user";
 
   return (
@@ -108,7 +151,7 @@ export function MessageBubble({ message }: Props) {
           {isUser ? (
             <p className="whitespace-pre-wrap">{message.content}</p>
           ) : (
-            renderContentWithCitations(message)
+            renderContentWithCitations(message, onCitationClick)
           )}
         </div>
 

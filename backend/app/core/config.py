@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     # ── LLM ──────────────────────────────────────────────────────────────────
     groq_api_key: str = Field(..., description="Groq API key")
+    gemini_api_key: str = Field(default="", description="Google Gemini API key for study tools")
     model_names: List[str] | str = Field(
         default=["llama-3.3-70b-versatile"],
         description="Comma-separated list of allowed Groq model identifiers",
